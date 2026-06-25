@@ -66,7 +66,7 @@ Or call the verification functions directly - they use only the stdlib:
 ```python
 import cg_mcp_server as cg
 print(cg.check(open("Counter.cg").read()))
-print(cg.generate_verilog(open("Counter.cg").read()))
+print(cg.generate(open("Counter.cg").read()))
 ```
 
 See `examples/` for 18 validated C⏚ designs and `cg_context.md` /
