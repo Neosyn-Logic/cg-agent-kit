@@ -1,0 +1,457 @@
+{
+  "_comment": "Validated-code dictionary for the Cg recipe library. Every entry compiles + simulates + synthesizes (yosys). kind=primitive -> general/customer-reusable; kind=example -> illustrative composition (one domain). Merge examples/*.cg into the kit; fold this metadata into _RECIPE_META.",
+  "entries": [
+    {
+      "name": "Recip",
+      "kind": "primitive",
+      "family": "arith",
+      "ops": [
+        "div",
+        "reciprocal"
+      ],
+      "tags": [
+        "reciprocal",
+        "recip",
+        "inverse",
+        "1/x",
+        "one-over"
+      ],
+      "use_when": "1/d reciprocal of a runtime value (no hardware divider)",
+      "adapt": "change numerator scaling; widen for more fractional bits",
+      "verified": {
+        "sim": true,
+        "yosys_cells": 252
+      },
+      "note": "bit-serial long division (digit recurrence); literal shifts only; unrolled combinational"
+    },
+    {
+      "name": "Divide",
+      "kind": "primitive",
+      "family": "arith",
+      "ops": [
+        "div"
+      ],
+      "tags": [
+        "divide",
+        "division",
+        "a/b",
+        "quotient",
+        "ratio"
+      ],
+      "use_when": "general a/b division of runtime operands",
+      "adapt": "swap the numerator pre-shift for the output Q-format",
+      "verified": {
+        "sim": true,
+        "yosys_cells": 284
+      },
+      "note": "generalizes Recip; same digit-recurrence"
+    },
+    {
+      "name": "SeqDiv",
+      "kind": "primitive",
+      "family": "arith",
+      "ops": [
+        "div",
+        "sequential"
+      ],
+      "tags": [
+        "divide",
+        "sequential",
+        "multicycle",
+        "area-efficient",
+        "fsm",
+        "streaming-io"
+      ],
+      "use_when": "area-cheap divider when latency is acceptable (one stage reused over N cycles)",
+      "adapt": "change bit count / Q-format; same FSM",
+      "verified": {
+        "sim": true,
+        "yosys_cells": 42
+      },
+      "note": "rate-changing port I/O (read-when-idle, write-when-done); ~7x smaller than combinational Divide, ~48x latency"
+    },
+    {
+      "name": "FixedSqrt",
+      "kind": "primitive",
+      "family": "transcendental",
+      "ops": [
+        "sqrt"
+      ],
+      "tags": [
+        "sqrt",
+        "root",
+        "isqrt",
+        "square-root"
+      ],
+      "use_when": "Q16.16 square root",
+      "adapt": "feed your value as x; keep the literal-shift isqrt loop",
+      "verified": {
+        "sim": true,
+        "yosys_cells": 211
+      }
+    },
+    {
+      "name": "RSqrt",
+      "kind": "primitive",
+      "family": "transcendental",
+      "ops": [
+        "rsqrt",
+        "sqrt",
+        "div"
+      ],
+      "tags": [
+        "rsqrt",
+        "inverse-sqrt",
+        "1/sqrt",
+        "one-over-sqrt",
+        "normalize"
+      ],
+      "use_when": "1/sqrt(x) (normalization, inverse magnitude)",
+      "adapt": "isqrt then bit-serial reciprocal; both literal-shift",
+      "verified": {
+        "sim": true,
+        "yosys_cells": 461
+      }
+    },
+    {
+      "name": "SqrDist",
+      "kind": "primitive",
+      "family": "dsp",
+      "ops": [
+        "mul",
+        "sub",
+        "reduce",
+        "mac"
+      ],
+      "tags": [
+        "squared",
+        "sqrdist",
+        "sum-of-squares",
+        "r2",
+        "ports",
+        "reduction",
+        "distance-squared",
+        "weighted"
+      ],
+      "use_when": "weighted squared-difference reduction with REAL input ports (datapath survives synthesis)",
+      "adapt": "per-element op (weights via fxmul(w,fxmul(d,d))); keep in-push ports + driver",
+      "verified": {
+        "sim": true,
+        "yosys_cells": 22
+      }
+    },
+    {
+      "name": "DotProduct",
+      "kind": "primitive",
+      "family": "dsp",
+      "ops": [
+        "mul",
+        "mac",
+        "reduce"
+      ],
+      "tags": [
+        "dot",
+        "mac",
+        "multiply-accumulate",
+        "inner-product",
+        "reduction"
+      ],
+      "use_when": "fixed-point multiply-accumulate over vectors",
+      "adapt": "change per-element op via fxmul; add input vectors",
+      "verified": {
+        "sim": true,
+        "yosys_cells": 17
+      }
+    },
+    {
+      "name": "Fir",
+      "kind": "primitive",
+      "family": "dsp",
+      "ops": [
+        "mul",
+        "mac",
+        "stream"
+      ],
+      "tags": [
+        "fir",
+        "filter",
+        "convolution",
+        "stream",
+        "taps",
+        "sliding"
+      ],
+      "use_when": "streaming FIR filter; sample shift-register is state",
+      "adapt": "change taps/coeffs and tap count",
+      "verified": {
+        "sim": true,
+        "yosys_cells": 13
+      },
+      "note": "stateful streaming (one sample in/out per cycle)"
+    },
+    {
+      "name": "Integ",
+      "kind": "primitive",
+      "family": "control",
+      "ops": [
+        "mac",
+        "stateful",
+        "integrate"
+      ],
+      "tags": [
+        "integrator",
+        "euler",
+        "timestep",
+        "kick",
+        "drift",
+        "state",
+        "accumulate"
+      ],
+      "use_when": "Euler integrator v+=a*dt; x+=v*dt; stateful pos/vel time loop",
+      "adapt": "change the update rule / add leapfrog half-steps",
+      "verified": {
+        "sim": true,
+        "yosys_cells": 6
+      }
+    },
+    {
+      "name": "Distance",
+      "kind": "primitive",
+      "family": "dsp",
+      "ops": [
+        "mul",
+        "mac",
+        "sqrt",
+        "reduce"
+      ],
+      "tags": [
+        "distance",
+        "euclid",
+        "euclidean",
+        "norm",
+        "magnitude",
+        "length",
+        "hypot",
+        "l2"
+      ],
+      "use_when": "Euclidean distance r = sqrt(sum (a-b)^2) (pre-composed MAC + isqrt)",
+      "adapt": "change per-term op or vector length; keep the isqrt",
+      "verified": {
+        "sim": true,
+        "yosys_cells": 229
+      }
+    },
+    {
+      "name": "Counter",
+      "kind": "primitive",
+      "family": "control",
+      "ops": [
+        "stateful",
+        "increment"
+      ],
+      "tags": [
+        "counter",
+        "sequential",
+        "state",
+        "register",
+        "increment",
+        "tick"
+      ],
+      "use_when": "sequential state -> a registered output that advances each cycle",
+      "adapt": "change the update rule in loop(); widen the type for bigger ranges",
+      "verified": {
+        "sim": true
+      },
+      "note": "registered-output phase: first value out is the reset value"
+    },
+    {
+      "name": "BarrelShift",
+      "kind": "primitive",
+      "family": "arith",
+      "ops": [
+        "shift",
+        "barrel"
+      ],
+      "tags": [
+        "shift",
+        "barrel",
+        "shifter",
+        "sll",
+        "srl",
+        "sra",
+        "variable-shift",
+        "shift-by-variable",
+        "logical-shift",
+        "arithmetic-shift"
+      ],
+      "use_when": "shift by a RUNTIME amount (Cg cannot emit a variable shift) \u2014 a mux tree of literal shifts",
+      "adapt": "drop the arms you don't need; widen the value/amount; SRA uses i32, SLL/SRL stay u32",
+      "verified": {
+        "sim": true,
+        "yosys_cells": 445
+      },
+      "note": "the canonical workaround for 'shift by a variable' \u2014 how barrel shifters are built in RTL (literal power-of-two shifts gated by each shift-amount bit)"
+    },
+    {
+      "name": "RegisterFile",
+      "kind": "primitive",
+      "family": "memory",
+      "ops": [
+        "array",
+        "indexed",
+        "stateful"
+      ],
+      "tags": [
+        "register-file",
+        "regfile",
+        "array",
+        "indexed",
+        "x0",
+        "hardwired-zero",
+        "write-first",
+        "memory",
+        "two-read-ports"
+      ],
+      "use_when": "an array addressed by a runtime index, with a hardwired-zero entry and write-first reads",
+      "adapt": "change entry count/width; drop the x0 guard if no hardwired zero; add or remove read ports",
+      "verified": {
+        "sim": true,
+        "yosys_cells": 10466
+      },
+      "note": "runtime-indexed read AND write; entry 0 hardwired to 0 via guards (no real cell); write applied before reads"
+    },
+    {
+      "name": "BitFieldDecode",
+      "kind": "primitive",
+      "family": "decode",
+      "ops": [
+        "extract",
+        "sign-extend",
+        "decode"
+      ],
+      "tags": [
+        "bitfield",
+        "extract",
+        "sign-extend",
+        "sign-extension",
+        "decode",
+        "immediate",
+        "field",
+        "slice",
+        "instruction-decode"
+      ],
+      "use_when": "extract a bit field from a word and sign-extend it (shift+mask, reassemble scattered bits, cast through a narrow signed type)",
+      "adapt": "change field positions/widths; a U-type-style upper-field needs no sign extension",
+      "verified": {
+        "sim": true,
+        "yosys_cells": 123
+      },
+      "note": "sign-extend by casting through i<N> of the field's natural width, then up to i32 (the sign bit replicates)"
+    },
+    {
+      "name": "Tee2",
+      "kind": "primitive",
+      "family": "dataflow",
+      "ops": [
+        "fanout",
+        "replicate"
+      ],
+      "tags": [
+        "tee",
+        "fanout",
+        "fan-out",
+        "replicate",
+        "split",
+        "broadcast",
+        "duplicate",
+        "fork"
+      ],
+      "use_when": "replicate ONE push stream to two consumers (a bare push-output fan-out deadlocks the sim)",
+      "adapt": "add y2/y3... output ports for more consumers; one Tee per fan-out point",
+      "verified": {
+        "sim": true,
+        "yosys_cells": 33
+      },
+      "note": "explicit 1->2 replicator \u2014 the fix for the push-output fan-out deadlock (see reference_cg_push_fanout_deadlock)"
+    },
+    {
+      "name": "Clamp",
+      "kind": "primitive",
+      "family": "arith",
+      "ops": [
+        "compare",
+        "select",
+        "saturate"
+      ],
+      "tags": [
+        "clamp",
+        "saturate",
+        "clip",
+        "limit",
+        "min",
+        "max",
+        "range",
+        "bound",
+        "saturating"
+      ],
+      "use_when": "saturate/clip a value to a [lo,hi] range (overflow guard, range limit)",
+      "adapt": "fix lo/hi as constants for a one-sided limiter; widen the type as needed",
+      "verified": {
+        "sim": true,
+        "yosys_cells": 410
+      }
+    },
+    {
+      "name": "Lerp",
+      "kind": "primitive",
+      "family": "dsp",
+      "ops": [
+        "mul",
+        "interpolate"
+      ],
+      "tags": [
+        "lerp",
+        "interpolate",
+        "blend",
+        "mix",
+        "crossfade",
+        "ramp",
+        "linear-interpolation",
+        "tween"
+      ],
+      "use_when": "linear interpolation y = a + (b-a)*t, Q16.16, t in [0,1] (blend/ramp/crossfade)",
+      "adapt": "clamp t to [0,1] first; run one per channel to interpolate vectors",
+      "verified": {
+        "sim": true,
+        "yosys_cells": 6735
+      }
+    },
+    {
+      "name": "FifoPipe",
+      "kind": "example",
+      "family": "memory",
+      "ops": [
+        "fifo",
+        "queue",
+        "buffer",
+        "stream"
+      ],
+      "tags": [
+        "fifo",
+        "queue",
+        "buffer",
+        "stream",
+        "backpressure",
+        "SynchronousFIFO",
+        "producer-consumer",
+        "elastic",
+        "decouple"
+      ],
+      "use_when": "buffer/decouple a producer and consumer with an elastic queue (one clock domain)",
+      "adapt": "change {size,width}; for two clock domains use std.fifo.AsynchronousFIFO with a clocks property",
+      "verified": {
+        "sim": true
+      },
+      "note": "std.fifo.SynchronousFIFO: `new ...({size,width})`; wire `fifo.reads(producer.dout)` + `consumer.reads(fifo.dout)`. Both ports are `stream` so the handshake auto-stalls (write blocks when full, read blocks when empty); the FIFO holds each element until read. Verified on BOTH bytecode and iverilog."
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+package com.example;
+// Euclidean distance sqrt(sum (a-b)^2), PORT-DRIVEN -> real datapath (MAC + isqrt).
+task Distance {
+  in push int<32> a0; in push int<32> a1; in push int<32> a2; in push int<32> a3;
+  in push int<32> b0; in push int<32> b1; in push int<32> b2; in push int<32> b3;
+  out push int<32> result;
+  const int<32> fxmul(int<32> x, int<32> y) { return (int<32>)((((int<64>)x)*((int<64>)y))>>16); }
+  void loop() {
+    int<32> d0=a0.read()-b0.read(); int<32> d1=a1.read()-b1.read();
+    int<32> d2=a2.read()-b2.read(); int<32> d3=a3.read()-b3.read();
+    int<32> r2 = fxmul(d0,d0)+fxmul(d1,d1)+fxmul(d2,d2)+fxmul(d3,d3);
+    u64 n=((u64)r2)<<16; u64 res=0; u64 bit=((u64)1)<<46;
+    for (u6 s=0;s<24;s++){ if(n>=res+bit){n=n-(res+bit);res=(res>>1)+bit;} else {res=res>>1;} bit=bit>>2; }
+    result.write((int<32>) res);
+  }
+}
+network Distance_test {
+  properties { test: { terminate: "monitor.finished" } }
+  dut = new Distance();
+  driver = new task {
+    out push int<32> a0; out push int<32> a1; out push int<32> a2; out push int<32> a3;
+    out push int<32> b0; out push int<32> b1; out push int<32> b2; out push int<32> b3;
+    void loop() { a0.write(131072); a1.write(262144); a2.write(393216); a3.write(524288);
+                  b0.write(65536); b1.write(131072); b2.write(196608); b3.write(262144); } };
+  monitor = new task { in push int<32> result; bool finished=false;
+    void setup() { int<32> r=result.read(); print("dist=",r,"\n"); assert(r==358955); finished=true; } };
+  dut.reads(driver.a0,driver.a1,driver.a2,driver.a3,driver.b0,driver.b1,driver.b2,driver.b3);
+  monitor.reads(dut.result);
+}

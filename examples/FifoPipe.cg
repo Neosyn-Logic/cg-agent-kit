@@ -1,0 +1,37 @@
+package com.example;
+
+// Verified Cg — using std.fifo.SynchronousFIFO. A producer streams 1,2,3,...
+// into the FIFO; a consumer reads them back in order. The `stream` handshake
+// is automatic: dout.write stalls while the FIFO is full, din.read stalls while
+// it is empty, and the FIFO holds each element until the consumer reads it.
+network FifoPipe {
+  properties { test: { terminate: "consumer.finished" } }
+
+  fifo = new std.fifo.SynchronousFIFO({size: 16, width: 8});
+
+  producer = new task {
+    out stream u8 dout;
+    u8 n = 0;
+    void loop() {
+      n++;
+      dout.write(n);          // stalls automatically when the FIFO is full
+    }
+  };
+
+  consumer = new task {
+    in stream u8 din;
+    bool finished = false;
+    void setup() {
+      u8 a = din.read;        // each read stalls until a value is available
+      u8 b = din.read;
+      u8 c = din.read;
+      u8 d = din.read;
+      print("fifo out = ", a, " ", b, " ", c, " ", d, "\n");
+      assert(a == 1); assert(b == 2); assert(c == 3); assert(d == 4);
+      finished = true;
+    }
+  };
+
+  fifo.reads(producer.dout);  // producer.dout -> fifo.din
+  consumer.reads(fifo.dout);  // fifo.dout    -> consumer.din
+}

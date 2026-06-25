@@ -1,0 +1,29 @@
+package com.example;
+
+// Lerp — linear interpolation y = a + (b-a)*t, Q16.16, t in [0,1]. PORT-DRIVEN.
+// Ubiquitous in graphics/DSP/animation/control (blend, ramp, crossfade). Uses the
+// exactly-one->>16 fixed-point multiply. Verified: sim ok, REAL.
+task Lerp {
+  in push int<32> a; in push int<32> b; in push int<32> t;
+  out push int<32> y;
+  const int<32> fxmul(int<32> p, int<32> q) { return (int<32>) ((((int<64>) p) * ((int<64>) q)) >> 16); }
+  void loop() {
+    int<32> av = a.read(); int<32> bv = b.read(); int<32> tv = t.read();
+    y.write(av + fxmul(bv - av, tv));
+  }
+}
+
+network Lerp_test {
+  properties { test: { terminate: "monitor.finished" } }
+  dut = new Lerp();
+  driver = new task {
+    out push int<32> a; out push int<32> b; out push int<32> t;
+    void loop() { a.write(131072); b.write(262144); t.write(32768); }  // lerp(2,4,0.5) -> 3
+  };
+  monitor = new task {
+    in push int<32> y; bool finished = false;
+    void setup() { int<32> r = y.read(); print("lerp=", r, " (expect 196608=3.0)\n"); assert(r == 196608); finished = true; }
+  };
+  dut.reads(driver.a, driver.b, driver.t);
+  monitor.reads(dut.y);
+}

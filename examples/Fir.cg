@@ -1,0 +1,24 @@
+package com.example;
+// 4-tap streaming FIR: y[n]=sum c[k]*x[n-k]. Sample shift-register is STATE
+// (persists across loop() activations, like Counter). One sample in / one out per cycle.
+task Fir {
+  in push int<32> x;
+  out push int<32> y;
+  int<32> x0 = 0; int<32> x1 = 0; int<32> x2 = 0; int<32> x3 = 0;
+  const int<32> fxmul(int<32> a, int<32> b) { return (int<32>)((((int<64>)a)*((int<64>)b))>>16); }
+  void loop() {
+    int<32> s = x.read();
+    x3 = x2; x2 = x1; x1 = x0; x0 = s;
+    // non-power-of-two coeffs [0.6, 0.3, 0.15, 0.05] (Q16.16) so the taps are
+    // real $mul cells — power-of-two coeffs fold to shifts and hide the datapath.
+    y.write(fxmul(39322, x0) + fxmul(19661, x1) + fxmul(9830, x2) + fxmul(3277, x3));
+  }
+}
+network Fir_test {
+  properties { test: { terminate: "monitor.finished" } }
+  dut = new Fir();
+  driver = new task { out push int<32> x; void loop() { x.write(65536); x.write(131072); x.write(196608); x.write(262144); x.write(327680); } };
+  monitor = new task { in push int<32> y; bool finished=false;
+    void setup() { int<32> y0=y.read(); int<32> y1=y.read(); int<32> y2=y.read(); int<32> y3=y.read(); int<32> y4=y.read(); print("fir done\n"); assert(y0==39322); assert(y1==98305); assert(y2==167118); assert(y3==239208); assert(y4==311298); finished=true; } };
+  dut.reads(driver.x); monitor.reads(dut.y);
+}

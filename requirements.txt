@@ -1,0 +1,4 @@
+# C⏚ agent kit — MCP server dependency.
+# The core verification functions in cg_mcp_server.py use only the stdlib;
+# `mcp` is needed only to run it as an MCP server.
+mcp>=1.0

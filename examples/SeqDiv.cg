@@ -1,0 +1,28 @@
+package com.example;
+// Sequential divider: one stage/cycle, state persists, reads inputs only when idle,
+// writes result only when done. Tests whether Cg supports rate-changing port I/O.
+task SeqDiv {
+  in push int<32> a; in push int<32> b;
+  out push int<32> q;
+  u64 num = 0; u64 rem = 0; u64 quo = 0; u64 dd = 0;
+  u6 step = 0; bool busy = false;
+  void loop() {
+    if (!busy) {
+      num = ((u64) a.read()) << 16; dd = (u64) b.read();
+      rem = 0; quo = 0; step = 0; busy = true;
+    } else {
+      rem = (rem << 1) | ((num >> 47) & 1); num = num << 1; quo = quo << 1;
+      if (rem >= dd) { rem = rem - dd; quo = quo | 1; }
+      step = step + 1;
+      if (step == 48) { q.write((int<32>) quo); busy = false; }
+    }
+  }
+}
+network SeqDiv_test {
+  properties { test: { terminate: "monitor.finished" } }
+  dut = new SeqDiv();
+  driver = new task { out push int<32> a; out push int<32> b; void loop() { a.write(393216); b.write(131072); } };
+  monitor = new task { in push int<32> q; bool finished=false;
+    void setup() { int<32> v=q.read(); print("seqdiv a/b=",v," (expect 196608)\n"); finished=true; } };
+  dut.reads(driver.a, driver.b); monitor.reads(dut.q);
+}

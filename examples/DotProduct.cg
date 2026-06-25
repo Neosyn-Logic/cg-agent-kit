@@ -1,0 +1,26 @@
+package com.example;
+// Q16.16 dot product, PORT-DRIVEN (a/b on push ports) -> real $mul datapath.
+task DotProduct {
+  in push int<32> a0; in push int<32> a1; in push int<32> a2; in push int<32> a3;
+  in push int<32> b0; in push int<32> b1; in push int<32> b2; in push int<32> b3;
+  out push int<32> result;
+  const int<32> fxmul(int<32> x, int<32> y) { return (int<32>)((((int<64>)x)*((int<64>)y))>>16); }
+  void loop() {
+    int<32> acc = fxmul(a0.read(),b0.read()) + fxmul(a1.read(),b1.read())
+                + fxmul(a2.read(),b2.read()) + fxmul(a3.read(),b3.read());
+    result.write(acc);
+  }
+}
+network DotProduct_test {
+  properties { test: { terminate: "monitor.finished" } }
+  dut = new DotProduct();
+  driver = new task {
+    out push int<32> a0; out push int<32> a1; out push int<32> a2; out push int<32> a3;
+    out push int<32> b0; out push int<32> b1; out push int<32> b2; out push int<32> b3;
+    void loop() { a0.write(65536); a1.write(131072); a2.write(196608); a3.write(262144);
+                  b0.write(32768); b1.write(32768); b2.write(32768); b3.write(32768); } };
+  monitor = new task { in push int<32> result; bool finished=false;
+    void setup() { int<32> r=result.read(); print("dot=",r,"\n"); assert(r==327680); finished=true; } };
+  dut.reads(driver.a0,driver.a1,driver.a2,driver.a3,driver.b0,driver.b1,driver.b2,driver.b3);
+  monitor.reads(dut.result);
+}

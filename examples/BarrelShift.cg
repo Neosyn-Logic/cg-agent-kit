@@ -1,0 +1,62 @@
+package com.example;
+
+// Verified Cg base — a BARREL SHIFTER: shift by a RUNTIME amount.
+//
+// Cg's Verilog backend cannot emit a shift by a variable (`x << n` where n is
+// not a literal). The synthesizable pattern — and how barrel shifters are built
+// in real RTL — is a mux tree: shift by each power of two conditionally, gated
+// by one bit of the shift amount. All the shifts below are by LITERAL constants.
+//
+// op: 0 = SLL (logical left), 1 = SRL (logical right), 2 = SRA (arithmetic right)
+// The shift amount is amt[4:0] (0..31 for a 32-bit word).
+task BarrelShift {
+  // op, val,        amt, out
+  //  0 SLL 0x00000001, 4  -> 0x00000010
+  //  0 SLL 0x00000001, 31 -> 0x80000000
+  //  1 SRL 0x80000000, 4  -> 0x08000000   (zero fill)
+  //  2 SRA 0x80000000, 4  -> 0xF8000000   (sign fill)
+  //  2 SRA 0x7FFFFFFF, 4  -> 0x07FFFFFF
+  properties {
+    type: "combinational",
+    test: {
+      op:  [0,          0,          1,          2,          2         ],
+      val: [0x00000001, 0x00000001, 0x80000000, 0x80000000, 0x7FFFFFFF],
+      amt: [4,          31,         4,          4,          4         ],
+      result: [0x00000010, 0x80000000, 0x08000000, 0xF8000000, 0x07FFFFFF]
+    }
+  }
+
+  in u2 op;
+  in u32 val, amt;
+  out u32 result;
+
+  void loop() {
+    u5 sh = (u5) amt.read();        // shift amount = operand[4:0]
+    u2 o = op.read();
+    if (o == 0) {                   // SLL — logical left
+      u32 x = val.read();
+      if (sh[0]) { x = x << 1; }
+      if (sh[1]) { x = x << 2; }
+      if (sh[2]) { x = x << 4; }
+      if (sh[3]) { x = x << 8; }
+      if (sh[4]) { x = x << 16; }
+      result.write(x);
+    } else if (o == 1) {            // SRL — logical right (u32 >> is logical)
+      u32 x = val.read();
+      if (sh[0]) { x = x >> 1; }
+      if (sh[1]) { x = x >> 2; }
+      if (sh[2]) { x = x >> 4; }
+      if (sh[3]) { x = x >> 8; }
+      if (sh[4]) { x = x >> 16; }
+      result.write(x);
+    } else {                        // SRA — arithmetic right (i32 >> replicates sign)
+      i32 x = (i32) val.read();
+      if (sh[0]) { x = x >> 1; }
+      if (sh[1]) { x = x >> 2; }
+      if (sh[2]) { x = x >> 4; }
+      if (sh[3]) { x = x >> 8; }
+      if (sh[4]) { x = x >> 16; }
+      result.write((u32) x);
+    }
+  }
+}

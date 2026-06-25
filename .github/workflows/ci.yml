@@ -1,0 +1,34 @@
+name: ci
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile-check the Python
+        run: python -m py_compile cg_mcp_server.py cg_local_client.py cg_adapt_demo.py test_cg_mcp_server.py
+      - name: Validate the example dictionary
+        run: |
+          python - <<'PY'
+          import json, pathlib
+          m = json.load(open("manifest.json"))
+          entries = m["entries"]
+          assert entries, "no dictionary entries"
+          ex = {p.stem for p in pathlib.Path("examples").glob("*.cg")}
+          print(f"{len(entries)} dictionary entries, {len(ex)} example .cg files")
+          missing = [e["name"] for e in entries
+                     if e.get("name") and e["name"] not in ex]
+          # entries may reference designs by name; warn (don't fail) on any gap
+          if missing:
+              print("note: entries without a matching examples/<name>.cg:", missing)
+          print("manifest OK")
+          PY

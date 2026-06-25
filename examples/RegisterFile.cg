@@ -1,0 +1,51 @@
+package com.example;
+
+// Verified Cg base — an indexed REGISTER FILE: an array addressed by a runtime
+// value, with one entry hardwired to zero (the RISC-V x0 convention) and
+// write-first read semantics.
+//
+// Patterns worth copying:
+//   - `registers[addr]` with a RUNTIME index works for both read and write.
+//   - "hardwired zero": guard the write (`if (wa != 0)`) and the read
+//     (`a == 0 ? 0 : registers[a]`) so entry 0 is always 0 without a real cell.
+//   - write-first: do the write before the reads in loop(), so a read of a
+//     register written this cycle sees the new value.
+//   - `we` is a PUSH port — available() == "a write is requested this cycle";
+//     a `null` in the test vector means no write that cycle.
+task RegisterFile {
+  // we, wdata,      rs1, rs2, rdata1,     rdata2
+  // C0: write x5; read x5(write-first), x0  -> CAFEF00D, 0
+  // C1: write x7; read x5,          x7(wf)  -> CAFEF00D, BEEF
+  // C2: no write;  read x7,          x5     -> BEEF,     CAFEF00D
+  // C3: write x0 (DROPPED); read x0, x5     -> 0,        CAFEF00D
+  // C4: write x5;  read x5(write-first), x0 -> 12345678, 0
+  properties {
+    test: {
+      we:     [5,          7,          null,       0,          5         ],
+      wdata:  [0xCAFEF00D, 0x0000BEEF, 0x0,        0xDEADBEEF, 0x12345678],
+      rs1:    [5,          5,          7,          0,          5         ],
+      rs2:    [0,          7,          5,          5,          0         ],
+      rdata1: [0xCAFEF00D, 0xCAFEF00D, 0x0000BEEF, 0x0,        0x12345678],
+      rdata2: [0x0,        0x0000BEEF, 0xCAFEF00D, 0xCAFEF00D, 0x0       ]
+    }
+  }
+
+  in push u5 we, u32 wdata;
+  in u5 rs1, rs2;
+  out u32 rdata1, rdata2;
+
+  u32 registers[32];
+
+  void loop() {
+    if (we.available()) {
+      u5 wa = we.read();
+      if (wa != 0) {                 // entry 0 is hardwired zero — never written
+        registers[wa] = wdata.read();
+      }
+    }
+    u5 a1 = rs1.read();
+    u5 a2 = rs2.read();
+    rdata1.write(a1 == 0 ? (u32) 0 : registers[a1]);
+    rdata2.write(a2 == 0 ? (u32) 0 : registers[a2]);
+  }
+}

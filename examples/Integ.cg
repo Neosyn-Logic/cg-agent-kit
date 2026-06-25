@@ -1,0 +1,22 @@
+package com.example;
+// Euler integrator: v,x are STATE (persist across cycles). a in, x out, per cycle.
+task Integ {
+  in push int<32> acc;
+  out push int<32> pos;
+  int<32> v = 0; int<32> x = 0;
+  const int<32> fxmul(int<32> a, int<32> b) { return (int<32>)((((int<64>)a)*((int<64>)b))>>16); }
+  void loop() {
+    int<32> a = acc.read();
+    v = v + fxmul(a, 32768);
+    x = x + fxmul(v, 32768);
+    pos.write(x);
+  }
+}
+network Integ_test {
+  properties { test: { terminate: "monitor.finished" } }
+  dut = new Integ();
+  driver = new task { out push int<32> acc; void loop() { acc.write(65536); acc.write(65536); acc.write(65536); acc.write(65536); } };
+  monitor = new task { in push int<32> pos; bool finished=false;
+    void setup() { int<32> p0=pos.read(); int<32> p1=pos.read(); int<32> p2=pos.read(); int<32> p3=pos.read(); print("integ done\n"); assert(p0==16384); assert(p1==49152); assert(p2==98304); assert(p3==163840); finished=true; } };
+  dut.reads(driver.acc); monitor.reads(dut.pos);
+}

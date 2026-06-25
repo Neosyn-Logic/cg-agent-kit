@@ -1,0 +1,52 @@
+package com.example;
+
+// Ports-driven squared-distance reduction: out = Σ (a[i]-b[i])², Q16.16.
+// Inputs arrive on push ports (driven by the test driver), so the synthesized
+// DUT keeps a REAL datapath — subtracts, fxmul multiplies, adder tree —
+// instead of constant-folding to a literal. Adapted from DotProduct: the
+// per-element op is d = a-b then fxmul(d,d); the MAC accumulator stays.
+task SqrDist {
+  in push int<32> a0; in push int<32> a1; in push int<32> a2; in push int<32> a3;
+  in push int<32> b0; in push int<32> b1; in push int<32> b2; in push int<32> b3;
+  out push int<32> result;
+
+  // Q16.16 fixed-point multiply: exactly ONE >>16 per product.
+  const int<32> fxmul(int<32> x, int<32> y) {
+    return (int<32>) ((((int<64>) x) * ((int<64>) y)) >> 16);
+  }
+
+  void loop() {
+    int<32> d0 = a0.read() - b0.read();
+    int<32> d1 = a1.read() - b1.read();
+    int<32> d2 = a2.read() - b2.read();
+    int<32> d3 = a3.read() - b3.read();
+    int<32> acc = fxmul(d0, d0) + fxmul(d1, d1) + fxmul(d2, d2) + fxmul(d3, d3);
+    result.write(acc);
+  }
+}
+
+network SqrDist_test {
+  properties { test: { terminate: "monitor.finished" } }
+  dut = new SqrDist();
+  driver = new task {
+    out push int<32> a0; out push int<32> a1; out push int<32> a2; out push int<32> a3;
+    out push int<32> b0; out push int<32> b1; out push int<32> b2; out push int<32> b3;
+    void loop() {
+      // a=[1,2,3,4], b=[0.5,1,1.5,2] (Q16.16) -> Σ(a-b)² = 7.5 -> 491520
+      a0.write(65536);  a1.write(131072); a2.write(196608); a3.write(262144);
+      b0.write(32768);  b1.write(65536);  b2.write(98304);  b3.write(131072);
+    }
+  };
+  monitor = new task {
+    in push int<32> result;
+    bool finished = false;
+    void setup() {
+      int<32> r = result.read();
+      print("sqrDist = ", r, " (expect 491520 = 7.5 Q16.16)\n");
+      assert(r == 491520);
+      finished = true;
+    }
+  };
+  dut.reads(driver.a0, driver.a1, driver.a2, driver.a3, driver.b0, driver.b1, driver.b2, driver.b3);
+  monitor.reads(dut.result);
+}

@@ -1,0 +1,45 @@
+package com.example;
+
+// Fixed-point reciprocal 1/d (Q16.16), RUNTIME divisor, no hardware divider.
+// Cg rejects `/` by a variable AND variable shifts. So this is a bit-serial
+// long division (digit recurrence): numerator 2^32 / d_raw, MSB-first, using
+// only LITERAL shifts (>>47, <<1) + add/sub over a CONSTANT 48-step loop that
+// the compiler unrolls into a combinational divider (same principle as the
+// isqrt base). q = floor(2^32 / d_raw) = the Q16.16 reciprocal of d.
+//   verified 2026-06-09: 0.5, 1/3, 0.1 exact; yosys 252 cells (48 $ge/47 $sub/155 mux).
+// Caveat: fully-unrolled => area-heavy + long combinational path (pipeline for real HW);
+//   d<~1/32768 overflows int<32>.
+task Recip {
+  in push int<32> d;
+  out push int<32> inv;
+  void loop() {
+    u64 dd  = (u64) d.read();
+    u64 num = ((u64) 1) << 32;
+    u64 rem = 0;
+    u64 q   = 0;
+    for (u6 s = 0; s < 48; s++) {
+      rem = (rem << 1) | ((num >> 47) & 1);
+      num = num << 1;
+      q   = q << 1;
+      if (rem >= dd) { rem = rem - dd; q = q | 1; }
+    }
+    inv.write((int<32>) q);
+  }
+}
+
+network Recip_test {
+  properties { test: { terminate: "monitor.finished" } }
+  dut = new Recip();
+  driver = new task { out push int<32> d; void loop() { d.write(196608); } };  // 3.0 -> 0.3333 -> 21845
+  monitor = new task {
+    in push int<32> inv; bool finished = false;
+    void setup() {
+      int<32> v = inv.read();
+      print("1/d = ", v, " (expect 21845 = 0.3333 Q16.16)\n");
+      assert(v == 21845);
+      finished = true;
+    }
+  };
+  dut.reads(driver.d);
+  monitor.reads(dut.inv);
+}

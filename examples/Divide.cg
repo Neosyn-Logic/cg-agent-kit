@@ -1,0 +1,22 @@
+package com.example;
+task Divide {
+  in push int<32> a; in push int<32> b;
+  out push int<32> q;
+  void loop() {
+    u64 num = ((u64) a.read()) << 16; u64 dd = (u64) b.read();
+    u64 rem = 0; u64 quo = 0;
+    for (u6 s = 0; s < 48; s++) {
+      rem = (rem << 1) | ((num >> 47) & 1); num = num << 1; quo = quo << 1;
+      if (rem >= dd) { rem = rem - dd; quo = quo | 1; }
+    }
+    q.write((int<32>) quo);
+  }
+}
+network Divide_test {
+  properties { test: { terminate: "monitor.finished" } }
+  dut = new Divide();
+  driver = new task { out push int<32> a; out push int<32> b; void loop() { a.write(393216); b.write(131072); } };
+  monitor = new task { in push int<32> q; bool finished=false;
+    void setup() { int<32> v=q.read(); print("a/b=",v," (expect 196608)\n"); assert(v==196608); finished=true; } };
+  dut.reads(driver.a, driver.b); monitor.reads(dut.q);
+}

@@ -1,0 +1,45 @@
+package com.example;
+
+// rsqrt(x) = 1/sqrt(x), Q16.16, RUNTIME x on a port, fully synthesizable.
+// No hardware divider / variable shifter: sqrt via 24-stage bit-by-bit isqrt,
+// then 1/r via 48-stage bit-serial long division. Both literal-shift,
+// constant-count -> unroll to combinational. Verified 2026-06-09.
+task RSqrt {
+  in push int<32> x;
+  out push int<32> result;
+  void loop() {
+    int<32> xv = x.read();
+    // r = sqrt(x): isqrt of (xv<<16)
+    u64 n = ((u64) xv) << 16; u64 res = 0; u64 bit = ((u64) 1) << 46;
+    for (u6 s = 0; s < 24; s++) {
+      if (n >= res + bit) { n = n - (res + bit); res = (res >> 1) + bit; }
+      else { res = res >> 1; }
+      bit = bit >> 2;
+    }
+    u64 r = res;
+    // inv = 1/r via bit-serial long division (2^32 / r)
+    u64 num = ((u64) 1) << 32; u64 rem = 0; u64 q = 0;
+    for (u6 t = 0; t < 48; t++) {
+      rem = (rem << 1) | ((num >> 47) & 1);
+      num = num << 1; q = q << 1;
+      if (rem >= r) { rem = rem - r; q = q | 1; }
+    }
+    result.write((int<32>) q);
+  }
+}
+network RSqrt_test {
+  properties { test: { terminate: "monitor.finished" } }
+  dut = new RSqrt();
+  driver = new task { out push int<32> x; void loop() { x.write(262144); } };   // 4.0 -> 1/2 = 0.5
+  monitor = new task {
+    in push int<32> result; bool finished = false;
+    void setup() {
+      int<32> v = result.read();
+      print("rsqrt = ", v, " (expect 32768 = 0.5 Q16.16)\n");
+      assert(v == 32768);
+      finished = true;
+    }
+  };
+  dut.reads(driver.x);
+  monitor.reads(dut.result);
+}

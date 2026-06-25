@@ -1,0 +1,65 @@
+package com.example;
+
+// Verified Cg base — BIT-FIELD EXTRACTION + SIGN EXTENSION from a word.
+//
+// The reusable idiom (shown here on RISC-V's RV32I immediate formats):
+//   - extract a field with a LITERAL shift + mask:  (w >> lo) & mask
+//   - reassemble scattered bits with shifts + OR
+//   - sign-extend by casting through a SIGNED type of the field's natural width
+//     (i12 / i13 / i21) and then up to i32 — the sign bit replicates:
+//         imm = (u32)(i32)(i12) field;
+//   - U-type needs no extension (the 20 bits already sit in the high end).
+//
+// sel: 0=I  1=S  2=B  3=U  4=J   (RV32I immediate formats)
+task BitFieldDecode {
+  // sel, inst,        imm
+  // 0 I 0x00500093 -> 0x00000005   (ADDI x1,x0,5)
+  // 0 I 0xFFF00093 -> 0xFFFFFFFF   (-1, sign-extended)
+  // 1 S 0xFE000E00 -> 0xFFFFFFFC   (store offset -4)
+  // 2 B 0xFE000C80 -> 0xFFFFFFF8   (branch offset -8)
+  // 3 U 0xABCDE000 -> 0xABCDE000   (upper-20 in place)
+  // 4 J 0xFFFFF000 -> 0xFFFFFFFE   (jump offset -2)
+  properties {
+    type: "combinational",
+    test: {
+      sel:  [0,          0,          1,          2,          3,          4         ],
+      inst: [0x00500093, 0xFFF00093, 0xFE000E00, 0xFE000C80, 0xABCDE000, 0xFFFFF000],
+      imm:  [0x00000005, 0xFFFFFFFF, 0xFFFFFFFC, 0xFFFFFFF8, 0xABCDE000, 0xFFFFFFFE]
+    }
+  }
+
+  in u3 sel;
+  in u32 inst;
+  out u32 imm;
+
+  void loop() {
+    u32 w = inst.read();
+    u3 s = sel.read();
+
+    if (s == 0) {                    // I: imm[11:0] = inst[31:20]
+      i12 f = (i12) (w >> 20);
+      imm.write((u32) (i32) f);
+    } else if (s == 1) {             // S: imm[11:5]=inst[31:25], imm[4:0]=inst[11:7]
+      u32 hi = (w >> 25) & 0x7F;
+      u32 lo = (w >> 7) & 0x1F;
+      i12 f = (i12) ((hi << 5) | lo);
+      imm.write((u32) (i32) f);
+    } else if (s == 2) {             // B: scattered, bit0 = 0
+      u32 b12   = (w >> 31) & 0x1;
+      u32 b11   = (w >> 7)  & 0x1;
+      u32 b10_5 = (w >> 25) & 0x3F;
+      u32 b4_1  = (w >> 8)  & 0xF;
+      i13 f = (i13) ((b12 << 12) | (b11 << 11) | (b10_5 << 5) | (b4_1 << 1));
+      imm.write((u32) (i32) f);
+    } else if (s == 3) {             // U: imm[31:12] = inst[31:12], low 12 = 0
+      imm.write(w & 0xFFFFF000);
+    } else {                         // J: scattered, bit0 = 0
+      u32 b20    = (w >> 31) & 0x1;
+      u32 b19_12 = (w >> 12) & 0xFF;
+      u32 b11    = (w >> 20) & 0x1;
+      u32 b10_1  = (w >> 21) & 0x3FF;
+      i21 f = (i21) ((b20 << 20) | (b19_12 << 12) | (b11 << 11) | (b10_1 << 1));
+      imm.write((u32) (i32) f);
+    }
+  }
+}

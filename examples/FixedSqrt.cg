@@ -1,0 +1,23 @@
+package com.example;
+// Q16.16 isqrt, PORT-DRIVEN (x on a push port) so the datapath survives synthesis.
+task FixedSqrt {
+  in push int<32> x;
+  out push int<32> result;
+  void loop() {
+    u64 n = ((u64) x.read()) << 16; u64 res = 0; u64 bit = ((u64) 1) << 46;
+    for (u6 s = 0; s < 24; s++) {
+      if (n >= res + bit) { n = n - (res + bit); res = (res >> 1) + bit; }
+      else { res = res >> 1; }
+      bit = bit >> 2;
+    }
+    result.write((int<32>) res);
+  }
+}
+network FixedSqrt_test {
+  properties { test: { terminate: "monitor.finished" } }
+  dut = new FixedSqrt();
+  driver = new task { out push int<32> x; void loop() { x.write(589824); } };  // 9.0 -> 3.0
+  monitor = new task { in push int<32> result; bool finished=false;
+    void setup() { int<32> r=result.read(); print("sqrt=",r,"\n"); assert(r==196608); finished=true; } };
+  dut.reads(driver.x); monitor.reads(dut.result);
+}

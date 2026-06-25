@@ -1,0 +1,29 @@
+package com.example;
+
+// Tee2 — a 1->2 push replicator. In C⏚ a single push output wired to TWO
+// consumers DEADLOCKS the simulator (runs to the cycle cap, empty output, no
+// diagnostic). The fix is an explicit replicator task: read one token, write it
+// to both output ports. Use one Tee per fan-out point in a dataflow network.
+// Verified: sim ok, yosys REAL, 33 cells, 0 latches.
+task Tee2 {
+  in push int<32> a;
+  out push int<32> y0; out push int<32> y1;
+  void loop() { int<32> v = a.read(); y0.write(v); y1.write(v); }
+}
+
+network Tee2_test {
+  properties { test: { terminate: "monitor.finished" } }
+  dut = new Tee2();
+  driver = new task { out push int<32> a; void loop() { a.write(7); } };
+  monitor = new task {
+    in push int<32> y0; in push int<32> y1; bool finished = false;
+    void setup() {
+      int<32> a = y0.read(); int<32> b = y1.read();
+      print("tee y0=", a, " y1=", b, " expect 7,7\n");
+      assert(a == 7); assert(b == 7);
+      finished = true;
+    }
+  };
+  dut.reads(driver.a);
+  monitor.reads(dut.y0); monitor.reads(dut.y1);
+}

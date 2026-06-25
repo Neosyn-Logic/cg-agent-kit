@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.anthropic_key
+# generated compiler/sim artifacts
+examples/.ir/
+examples/**/.ir/
+*.vcd
+fpga/build/

@@ -1,0 +1,29 @@
+package com.example;
+
+// Verified Cg base — a counter that emits 0,1,2,... on a push port, one value
+// per cycle. `value` is state (a register); loop() is one hardware cycle.
+task Counter {
+  out push u8 count;
+  u8 value = 0;
+  void loop() {
+    count.write(value);
+    value = value + 1;
+  }
+}
+
+network Counter_test {
+  properties { test: { terminate: "monitor.finished" } }
+  dut = new Counter();
+  monitor = new task {
+    in push u8 count;
+    bool finished = false;
+    void setup() {
+      u8 a = count.read();  u8 b = count.read();
+      u8 c = count.read();  u8 d = count.read();
+      print("count = ", a, " ", b, " ", c, " ", d, "\n");
+      assert(a == 0); assert(b == 1); assert(c == 2); assert(d == 3);
+      finished = true;
+    }
+  };
+  monitor.reads(dut.count);
+}
