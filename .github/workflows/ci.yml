@@ -15,14 +15,17 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Compile-check the Python
-        run: python -m py_compile cg_mcp_server.py cg_local_client.py cg_adapt_demo.py test_cg_mcp_server.py
+      - name: Build-check the package + compile the Python
+        run: |
+          pip install build
+          python -m build
+          python -m py_compile cg_agent_kit/cg_mcp_server.py cg_local_client.py cg_adapt_demo.py test_cg_mcp_server.py
       - name: Validate the example dictionary
         run: |
           python - <<'PY'
           import json, pathlib
-          entries = json.load(open("manifest.json"))["entries"]
-          ex = {p.stem for p in pathlib.Path("examples").glob("*.cg")}
+          entries = json.load(open("cg_agent_kit/manifest.json"))["entries"]
+          ex = {p.stem for p in pathlib.Path("cg_agent_kit/examples").glob("*.cg")}
           print(f"{len(entries)} dictionary entries, {len(ex)} example .cg files")
           assert entries and ex, "empty dictionary or examples"
           print("manifest OK")
@@ -55,8 +58,8 @@ jobs:
           cd lsp-server && mvn -B -q clean package -Dproguard.skip=true
           test -f target/cg-language-server.jar
 
-      - name: Install kit deps
-        run: pip install -r requirements.txt
+      - name: Install the kit (editable, with deps)
+        run: pip install -e .
 
       - name: Run the test suite against the open jar
         env:

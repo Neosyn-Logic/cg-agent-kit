@@ -19,7 +19,7 @@ error substrings instead.
 import shutil
 import unittest
 
-import cg_mcp_server as cg
+from cg_agent_kit import cg_mcp_server as cg
 
 # Dependency gates for the integration tests.
 JAR_OK = cg.JAR.is_file()

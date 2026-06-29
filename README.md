@@ -38,39 +38,51 @@ fully** (generate Verilog + run Icarus Verilog). Everything else -
 check, generate, synth, the dictionary, docs - runs entirely on the open compiler.
 More at [neosyn.io/open](https://neosyn.io/open).
 
-## Setup
+## Install
 
-1. Build the open compiler jar from
-   [cg-compiler](https://github.com/Neosyn-Logic/cg-compiler):
-   ```bash
-   cd releng && mvn install -DskipTests && cd lsp-server && mvn package
-   ```
-2. Point the kit at it and install the MCP dependency:
-   ```bash
-   export CG_JAR=/path/to/cg-compiler/releng/lsp-server/target/cg-language-server.jar
-   pip install -r requirements.txt
-   ```
-3. (Optional, for `cg_synth` / the `iverilog` backend) install `yosys` and
-   `iverilog`.
+```bash
+pip install cg-agent-kit
+```
+
+Then point it at a built C⏚ compiler jar (download the prebuilt jar from
+[cg-compiler releases](https://github.com/Neosyn-Logic/cg-compiler/releases/latest),
+or build from source):
+
+```bash
+export CG_JAR=/path/to/cg-language-server.jar
+```
+
+(Optional, for `cg_synth` and the `iverilog` sim backend, install `yosys` and
+`iverilog`.)
 
 ## Run
 
-As an MCP server (for Claude Desktop, Cursor, or any MCP client):
+As an MCP server (for Claude Desktop, Cursor, Windsurf, or any MCP client):
 
 ```bash
-python cg_mcp_server.py
+cg-mcp-server
 ```
 
-Or call the verification functions directly - they use only the stdlib:
+Add it to your MCP client config, e.g.:
+
+```json
+{
+  "mcpServers": {
+    "cg": { "command": "cg-mcp-server", "env": { "CG_JAR": "/path/to/cg-language-server.jar" } }
+  }
+}
+```
+
+Or call the verification functions directly from Python:
 
 ```python
-import cg_mcp_server as cg
+from cg_agent_kit import cg_mcp_server as cg
 print(cg.check(open("Counter.cg").read()))
 print(cg.generate(open("Counter.cg").read()))
 ```
 
-See `examples/` for 18 validated C⏚ designs and `cg_context.md` /
-`cg_riscv.md` for the language + CPU-pattern references the `cg_docs` tool serves.
+The kit bundles 18 validated C⏚ designs and the language + CPU-pattern
+references the `cg_docs` tool serves.
 
 ## License
 

@@ -24,7 +24,7 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-import cg_mcp_server as cg
+from cg_agent_kit import cg_mcp_server as cg
 from cg_vs_verilog_eval import complete, extract
 
 CG_CONTEXT = open(os.path.join(HERE, "cg_context.md")).read()

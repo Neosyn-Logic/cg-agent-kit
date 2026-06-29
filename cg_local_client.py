@@ -27,7 +27,7 @@ import re
 import sys
 import urllib.request
 
-import cg_mcp_server as cg
+from cg_agent_kit import cg_mcp_server as cg
 
 _CODE = re.compile(r"```(?:cg|c)?\s*\n(.*?)```", re.S)
 

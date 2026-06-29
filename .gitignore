@@ -3,8 +3,11 @@ __pycache__/
 .venv/
 venv/
 .anthropic_key
+# python build artifacts
+build/
+dist/
+*.egg-info/
 # generated compiler/sim artifacts
-examples/.ir/
-examples/**/.ir/
+**/.ir/
 *.vcd
 fpga/build/
