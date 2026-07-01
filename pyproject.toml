@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cg-agent-kit"
-version = "0.1.0"
+version = "0.1.1"
 description = "MCP server for FPGA hardware design in C⏚ — drive the open-source C⏚ Verilog compiler from an AI agent."
 readme = "README.md"
 license = { text = "MIT" }

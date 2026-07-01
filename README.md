@@ -1,3 +1,5 @@
+<!-- mcp-name: io.neosyn/cg-agent-kit -->
+
 # cg-agent-kit - an MCP server for FPGA design in C⏚
 
 [![ci](https://github.com/Neosyn-Logic/cg-agent-kit/actions/workflows/ci.yml/badge.svg)](https://github.com/Neosyn-Logic/cg-agent-kit/actions/workflows/ci.yml)
