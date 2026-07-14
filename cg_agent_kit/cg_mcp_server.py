@@ -970,10 +970,39 @@ def _attach_suggestion(result: dict) -> dict:
 
 
 # -------------------------------------------------------------- MCP wrapper
+
+# Surfaced to the model on the first turn by MCP clients that honour server
+# instructions. Encodes the reliable "adapt a verified example, verify as you go"
+# workflow plus the gotchas that waste the most turns (all observed live).
+INSTRUCTIONS = """\
+These tools compile (cg_check), simulate (cg_simulate), synthesize (cg_synth) and
+document (cg_docs) Cg (C⏚) — Neosyn's hardware description language for FPGA. You
+most likely do NOT know Cg well; do not write it from memory.
+
+Reliable workflow (writing Cg from scratch fails — this path works):
+1. BEFORE writing any .cg, call cg_docs(topic="context") for the language model +
+   gotchas, and cg_example(pattern=...) to pull a VERIFIED kernel to adapt. Adapt
+   an example; do not invent syntax.
+2. Port ONE small kernel at a time. Run cg_check until it compiles clean, then
+   cg_simulate, before writing the next kernel. Verify as you go.
+3. Keep each turn small — a whole task plus its testbench network in one turn
+   overflows the context and stalls. Grow the file incrementally.
+4. On any cg_check / cg_simulate error, call cg_suggest_for_error before guessing.
+
+High-cost gotchas (these waste the most turns — all observed live):
+- `const` must live INSIDE a task or bundle, never at top level after `package`.
+- There is no `import std.lib` — do not import it.
+- Simulation: the fast bytecode simulator is commercial and absent from the OSS
+  compiler — use simulator="iverilog". iverilog only emits a testbench when the
+  network NAME contains "Test" (capital T, e.g. `network TestConv`), and the
+  driver must terminate (no infinite loop) or the sim times out.
+"""
+
+
 def build_server():
     from mcp.server.fastmcp import FastMCP
 
-    mcp = FastMCP("cg")
+    mcp = FastMCP("Neosyn Cg", instructions=INSTRUCTIONS)
 
     @mcp.tool()
     def cg_check(source: str, extra_files: dict | None = None,
