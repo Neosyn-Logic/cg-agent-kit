@@ -1,0 +1,112 @@
+package com.neosyn.examples.io;
+
+// SPI master (mode 0, MSB-first) — the clock-generating side of a synchronous
+// serial bus, and the standard way to talk to an ADC, DAC, flash, sensor or
+// display controller.
+//
+// SPI is FULL DUPLEX: every transfer both sends and receives. One byte goes out
+// on MOSI while another comes back on MISO in the same eight bit-times — there
+// is no separate "read" transaction. To read a device register you clock out
+// the address and simultaneously clock in whatever the slave drives back, which
+// is why `tx` and `rx` are both present on a single `start` pulse.
+//
+// Unlike a UART, the master OWNS the clock, so there is no baud agreement and
+// no start/stop framing: `csn` frames the transfer instead. That is the whole
+// difference between the two serial families, and why this block generates
+// `sclk` while UartRx has to recover timing from the data itself.
+//
+// One SPI bit = TWO fabric clocks, tracked by the `ph` (phase) register:
+//   ph=0  sclk LOW  — MOSI holds the current bit, stable for the slave
+//   ph=1  sclk HIGH — the slave has sampled MOSI on the rising edge, and the
+//                     master samples MISO here; on the fall MOSI advances
+// That is mode 0 (CPOL=0 idle-low, CPHA=0 sample-on-leading-edge). For mode 3
+// (CPOL=1) invert `sclk` on the way out; for the CPHA=1 modes swap which half
+// samples and which shifts.
+//
+// `rx` HOLDS the last received byte, so qualify it with `done` — exactly the
+// same rule as UartRx's `data`/`valid`.
+//
+// TO ADAPT:
+//   * slower sclk — one bit is two clocks here (sclk = fabric/2, the fastest
+//     possible). Gate the body behind a Pwm `tick` to divide it down to a rate
+//     the slave accepts; the FSM below is unchanged.
+//   * wider transfers — widen `sh`/`rsh`/`tx`/`rx` and load `cnt` with the bit
+//     count (16- and 24-bit frames are common for ADCs and flash commands).
+//   * multi-byte transactions — hold `csn` low across several bytes instead of
+//     releasing it at `cnt == 0`; most flash/display protocols require this.
+//   * several slaves — one `csn` per device, all sharing sclk/mosi/miso.
+//
+// Timing (as in every Cg FSM): a port reflects the register at the START of the
+// cycle, so publish the CURRENT sclk/mosi/csn BEFORE advancing the phase — a
+// just-computed level would read back one cycle late and skew the clock against
+// the data. The registers are inline-initialized (no setup(), which would add a
+// reset state that offsets the whole stream).
+task SpiMaster {
+    properties {
+        test: {
+            // tx = 0x53 goes out on MOSI while the slave returns 0xA5 on MISO (full duplex)
+            start: [ 1,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0 ],
+            tx:    [ 0x53, 0x53, 0x53, 0x53, 0x53, 0x53, 0x53, 0x53, 0x53, 0x53, 0x53, 0x53, 0x53, 0x53, 0x53, 0x53, 0x53, 0x53, 0x53, 0x53, 0x53 ],
+            // the slave drives MISO; the master samples it on the sclk-HIGH cycles (2,4,...,16)
+            miso:  [ 0,    0,    1,    0,    0,    0,    1,    0,    0,    0,    0,    0,    1,    0,    0,    0,    1,    0,    0,    0,    0 ],
+            // csn frames the transfer: low for exactly the 16 cycles of 8 bit-times
+            csn:   [ 1,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    1,    1,    1,    1 ],
+            sclk:  [ 0,    0,    1,    0,    1,    0,    1,    0,    1,    0,    1,    0,    1,    0,    1,    0,    1,    0,    0,    0,    0 ],
+            // MOSI carries 0x53 MSB-first, each bit held across its sclk-low/high pair
+            mosi:  [ 0,    0,    0,    1,    1,    0,    0,    1,    1,    0,    0,    0,    0,    1,    1,    1,    1,    0,    0,    0,    0 ],
+            done:  [ 0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    1,    0,    0,    0 ],
+            rx:    [ 0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,    0, 0xA5, 0xA5, 0xA5, 0xA5 ]
+        }
+    }
+
+    sync {
+        in  bool start; in u8 tx; in bool miso;
+        out bool sclk;  out bool mosi; out bool csn; out u8 rx; out bool done;
+    }
+
+    u8   sh     = 0;      // TX shift register — MSB is the bit on the wire
+    u8   rsh    = 0;      // RX shift register — bits arrive MSB-first, so shift LEFT
+    u4   cnt    = 0;      // bits left in this transfer
+    bool ph     = false;  // half-bit phase: false = sclk low, true = sclk high
+    bool active = false;  // a transfer is in flight (csn is its inverse)
+    u8   dout   = 0;      // last received byte — held until the next transfer
+    bool dn     = false;  // one-cycle completion pulse
+
+    void loop() {
+        bool s = start.read();
+        u8   d = tx.read();
+        bool m = miso.read();
+
+        // Moore outputs for the CURRENT state — published BEFORE the transition.
+        csn.write(!active);
+        sclk.write(ph);
+        mosi.write(sh[7]);     // bool port: write the bit itself, don't compare it
+        rx.write(dout);
+        done.write(dn);
+
+        dn = false;
+
+        if (!active) {
+            if (s) {
+                sh = d;         // latch the byte to send
+                rsh = 0;
+                cnt = 8;
+                ph = false;
+                active = true;
+            }
+        } else if (!ph) {
+            ph = true;          // sclk rises; MOSI stays put across the edge
+        } else {
+            // sclk high: sample MISO, then advance MOSI as the clock falls
+            rsh = (u8) ((rsh << 1) | (m ? (u8) 1 : (u8) 0));
+            sh = (u8) (sh << 1);
+            ph = false;
+            cnt = cnt - 1;
+            if (cnt == 0) {
+                active = false;
+                dout = rsh;     // rsh already includes the bit just sampled
+                dn = true;
+            }
+        }
+    }
+}

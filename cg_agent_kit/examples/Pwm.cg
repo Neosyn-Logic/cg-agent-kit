@@ -1,0 +1,80 @@
+package com.neosyn.examples.io;
+
+// PWM + rate divider — counter and compare, the two things you build out of a
+// free-running counter.
+//
+// `pwm` is high for the first `duty` cycles of every PERIOD-cycle window (duty
+// cycle = duty/PERIOD), which drives LED brightness, motor speed, a DAC, a
+// servo. `tick` is the wrap pulse: exactly one cycle high at the start of each
+// period.
+//
+// THAT `tick` IS THE RATE DIVIDER, and it is the missing piece the UartTx and
+// UartRx examples point at when they say "gate the loop body behind a baud-tick
+// enable". Fabric runs at 100 MHz, a 115200-baud UART needs a bit every 868
+// cycles: instantiate this with PERIOD = 868, wire `tick` into the UART's enable
+// and the UART transmits at the right line rate without changing its FSM at all.
+// The same pulse is how you drive a 1 kHz refresh, a 1 ms debounce tick, or any
+// slow process from a fast clock.
+//
+// GLITCH-FREE UPDATE — the part people get wrong: `duty` is LATCHED into `dreg`
+// at the period boundary, not used directly. Comparing against the live input
+// means a mid-period change can cut a pulse short or stretch it, emitting a
+// runt cycle that a motor or LED sees as a flicker. Latching at the wrap makes
+// every period well-formed no matter when the input moves. The test below
+// changes `duty` mid-period on purpose to prove the period in flight is
+// undisturbed.
+//
+// TO ADAPT:
+//   * a real rate — PERIOD is in CLOCK CYCLES, so widen `cnt` to hold it
+//     (PERIOD = 868 needs u10; PERIOD = 100_000 for 1 kHz at 100 MHz needs u17).
+//     Widen the type and the const together; the compare is unchanged.
+//   * a pure clock divider — drop `duty`/`pwm`/`dreg` and keep `tick`.
+//   * phase-correct / centre-aligned PWM — count up then down instead of
+//     wrapping, so pulses stay centred in the period.
+//   * several channels — instantiate one per output with `new Pwm({PERIOD: n})`
+//     (see ScaleGen for the const-parameter pattern), or keep one counter and
+//     compare it against several duty registers.
+//
+// Timing (as in every Cg FSM): a port reflects the register at the START of the
+// cycle, so publish the CURRENT `pwm`/`tick` BEFORE advancing the counter. Both
+// outputs are Moore here — they depend only on registers, which is exactly why
+// latching `duty` matters. The registers are inline-initialized (no setup(),
+// which would add a reset state that offsets the whole stream).
+task Pwm {
+    properties {
+        test: {
+            //       |--- period 1: dreg still 0 ---|--- period 2: duty 3 ----|--- period 3: duty 6 ----|
+            //                                                 duty changes to 6 HERE, mid-period 2
+            duty: [ 3, 3, 3, 3, 3, 3, 3, 3,          3, 3, 6, 6, 6, 6, 6, 6,  6, 6, 6, 6, 6, 6, 6, 6 ],
+            // period 2 keeps duty 3 despite the mid-period change; period 3 picks up 6
+            pwm:  [ 0, 0, 0, 0, 0, 0, 0, 0,          1, 1, 1, 0, 0, 0, 0, 0,  1, 1, 1, 1, 1, 1, 0, 0 ],
+            // one-cycle wrap pulse, once per PERIOD — this is the rate-divider output
+            tick: [ 0, 0, 0, 0, 0, 0, 0, 0,          1, 0, 0, 0, 0, 0, 0, 0,  1, 0, 0, 0, 0, 0, 0, 0 ]
+        }
+    }
+
+    const int PERIOD = 8;    // cycles per PWM period / divider ratio
+
+    sync { in u4 duty; out bool pwm; out bool tick; }
+
+    u4   cnt  = 0;           // free-running position within the period
+    u4   dreg = 0;           // duty LATCHED at the last period boundary
+    bool t    = false;       // wrap pulse
+
+    void loop() {
+        u4 d = duty.read();
+
+        // Moore outputs for the CURRENT state — published BEFORE the transition.
+        pwm.write(cnt < dreg);
+        tick.write(t);
+
+        if (cnt == PERIOD - 1) {
+            cnt = 0;
+            t = true;
+            dreg = d;        // adopt the new duty only at the boundary
+        } else {
+            cnt = cnt + 1;
+            t = false;
+        }
+    }
+}

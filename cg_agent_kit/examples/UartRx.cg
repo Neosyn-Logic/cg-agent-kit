@@ -1,0 +1,81 @@
+package com.neosyn.examples.io;
+
+// UART receiver — the canonical serial-IN control FSM, and the exact pair to UartTx.
+//
+// Idle line high. A falling edge (the start bit) arms the machine; the next 8
+// cycles are shifted into a register LSB-first; the 10th cycle carries the stop
+// bit. `valid` pulses for ONE cycle when a frame is accepted, with `data` holding
+// the byte. Like UartTx, the "state" is a shift register (`sh`) plus a bit
+// counter (`cnt`) rather than a named enum — the right shape when the state is
+// really just "how many bits are left".
+//
+// FRAMING CHECK: the byte is committed only if the stop bit is HIGH. A frame
+// with a low stop bit is shifted in, then dropped — `data` keeps its previous
+// value and `valid` never fires. Hang a `out bool err` off that same else-branch
+// if you want to report framing errors rather than silently discard them.
+//
+// `data` HOLDS the last ACCEPTED byte between frames, so always qualify it with
+// `valid` — reading `data` on an arbitrary cycle gives you a stale byte, not a
+// new one.
+//
+// One bit = one clock here, so this receiver pairs cycle-for-cycle with UartTx.
+// A real UART cannot do that: the line is asynchronous, so it oversamples (16x
+// is standard), detects the start edge, then samples each bit at its MIDPOINT
+// (8 ticks in, then every 16). To get there, drive this same machine from a
+// sample-tick enable instead of every clock — the FSM below is unchanged, only
+// the cadence that advances it changes.
+//
+// Timing (as in every Cg FSM): a port reflects the register at the START of the
+// cycle, so publish the CURRENT `data`/`valid`/`busy` BEFORE updating the shift
+// register — a just-computed result would read back one cycle late. The
+// registers are inline-initialized (no setup(), which would add a reset state
+// that offsets the whole stream).
+task UartRx {
+    properties {
+        test: {
+            //        idle |------ frame for 0x53 ('S') ------| idle |--- frame for 0x41, BAD stop ---| idle
+            //             st  d0  d1  d2  d3  d4  d5  d6  d7  sp        st  d0  d1  d2  d3  d4  d5  d6  d7  sp
+            rx:    [ 1,    0,  1,  1,  0,  0,  1,  0,  1,  0,  1,  1,    0,  1,  0,  0,  0,  0,  0,  1,  0,  0,  1,  1 ],
+            // the accepted byte appears with `valid`, then HOLDS; the bad frame never overwrites it
+            data:  [ 0,    0,  0,  0,  0,  0,  0,  0,  0,  0,  0, 0x53, 0x53,0x53,0x53,0x53,0x53,0x53,0x53,0x53,0x53,0x53,0x53,0x53 ],
+            valid: [ 0,    0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  1,    0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0 ],
+            // busy DOES rise for the bad frame — it is received, then deliberately rejected
+            busy:  [ 0,    0,  1,  1,  1,  1,  1,  1,  1,  1,  1,  0,    0,  1,  1,  1,  1,  1,  1,  1,  1,  1,  0,  0 ]
+        }
+    }
+
+    sync { in bool rx; out u8 data; out bool valid; out bool busy; }
+
+    u8 sh   = 0;      // shift register: bits arrive LSB-first, so shift RIGHT
+    u4 cnt  = 0;      // bits left in the frame (0 = idle, hunting for a start bit)
+    u8 dout = 0;      // last ACCEPTED byte — held until the next good frame
+    bool got = false; // one-cycle accept pulse
+
+    void loop() {
+        bool r = rx.read();
+
+        // Moore outputs for the CURRENT state — published BEFORE the transition.
+        data.write(dout);
+        valid.write(got);
+        busy.write(cnt != 0);
+
+        got = false;
+
+        if (cnt == 0) {
+            if (!r) {
+                cnt = 9;     // start bit seen: 8 data bits + 1 stop bit still to come
+            }
+        } else if (cnt > 1) {
+            // shift in from the TOP: the first bit received ends up in bit 0
+            sh = (u8) ((sh >> 1) | (r ? (u8) 0x80 : (u8) 0));
+            cnt = cnt - 1;
+        } else {
+            // cnt == 1: this cycle carries the stop bit
+            if (r) {
+                dout = sh;   // framing OK -> commit the byte
+                got = true;
+            }
+            cnt = 0;         // either way, go back to hunting for a start bit
+        }
+    }
+}

@@ -1,0 +1,37 @@
+package t;
+// Streaming signed multiply on the std.math.Multiply built-in — a registered
+// (1-cycle) full-width product, p = a * b. p is int<64> because a 32x32 product
+// overflows 32 bits (the last vector, 46341^2 = 2147488281, is > INT32_MAX).
+//
+// PATTERN: the feeder/sink tasks adapt the network's external `push` ports to the
+// built-in's `stream` (valid+ready) handshake. Because those internal links are
+// `stream`, the multiplier's back-pressure flows all the way to the source and
+// paces the stream automatically. A single task that wrote both operands and read
+// the product would DROP a vector (the built-in is registered with no input FIFO).
+network MulStream {
+    properties {
+        test: {
+            a: [ 3, -5,  7, 46341 ],
+            b: [ 10, 4, -1, 46341 ],
+            p: [ 30, -20, -7, 2147488281 ]
+        }
+    }
+
+    in push int<32> a, b;
+    out push int<64> p;
+
+    feeder = new task {
+        out stream int<32> ma;
+        out stream int<32> mb;
+        void loop() { ma.write(a.read()); mb.write(b.read()); }
+    };
+
+    mul = new std.math.Multiply();
+    mul.reads(feeder.ma, feeder.mb);
+
+    sink = new task {
+        in stream int<64> mp;
+        void loop() { p.write(mp.read()); }
+    };
+    sink.reads(mul.p);
+}

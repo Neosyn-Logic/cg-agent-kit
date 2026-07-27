@@ -1,0 +1,59 @@
+package com.neosyn.examples.fsm;
+
+// Overlapping "1011" sequence detector — the canonical control FSM.
+// One serial bit in per cycle; `found` pulses on the cycle the pattern
+// completes. Overlapping: the trailing 1 of a match can start the next one.
+//
+// The machine's state is an ENUM (named states, self-documenting). Here it is
+// exposed as a plain integer code `scode` (u2) — the simplest shape for a
+// debug/observation signal. (An enum is ALSO a valid port type, so `out St scode`
+// would work too and carry the enum directly; a shared enum in a `bundle` lets
+// both sides of a cross-actor link name it.) This is the idiomatic Cg
+// state-machine shape: an enum state register + explicit next-state logic in
+// loop(), driving outputs.
+//
+// Timing (important for any Moore/Mealy FSM in Cg): a port reflects the register
+// as it was at the START of the cycle, so publish the CURRENT state and drive
+// each output BEFORE transitioning — do not write a just-computed *next* state
+// (it would read back one cycle late). `found` is a Mealy output (function of the
+// current state AND the incoming bit); `scode` is a Moore output (the current
+// state alone).
+task Seq1011 {
+    properties {
+        test: {
+            din:   [1, 0, 1, 1, 0, 1, 1, 0],   // serial bitstream
+            found: [0, 0, 0, 1, 0, 0, 1, 0],   // pulses when 1011 completes
+            scode: [0, 1, 2, 3, 1, 2, 3, 1]    // the state entering each cycle
+        }
+    }
+
+    sync {
+        in  bool din;     // one serial bit per cycle (valid every cycle)
+        out bool found;   // 1 on the cycle a "1011" completes (overlapping)
+        out u2   scode;   // the current state, as an integer code
+    }
+
+    enum St { S0, S1, S2, S3 }   // 0..3: length of the matched prefix
+
+    St st;   // defaults to S0 (the first member); no setup() means no extra reset state
+
+    void loop() {
+        bool b = din.read();
+
+        // --- outputs for the CURRENT state (published before the transition) ---
+        bool hit = (st == S3) && b;    // Mealy: "101" + 1  ==  "1011" completes
+        found.write(hit);
+        scode.write((u2) st);
+
+        // --- next-state logic ---
+        if (st == S0) {                // matched nothing
+            if (b) { st = S1; } else { st = S0; }
+        } else if (st == S1) {         // matched "1"
+            if (b) { st = S1; } else { st = S2; }   // "11"->1, "10"->10
+        } else if (st == S2) {         // matched "10"
+            if (b) { st = S3; } else { st = S0; }   // "101"->101, "100"->0
+        } else {                       // matched "101"
+            if (b) { st = S1; } else { st = S2; }   // "1011" overlap->1, "1010"->10
+        }
+    }
+}

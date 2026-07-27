@@ -1,0 +1,61 @@
+package com.neosyn.examples.io;
+
+// UART transmitter — the canonical serial-out control FSM.
+//
+// Idle line high. On `send` (with `data` valid that cycle) the byte is framed as
+// start(0) + 8 data bits LSB-first + stop(1) and shifted out one bit per clock;
+// `busy` is high while a frame is in flight. This is a control FSM whose "state"
+// is a shift register (`frame`) + a bit counter (`cnt`) rather than a named enum
+// — the right shape when the state is really just "how many bits are left".
+//
+// One bit = one clock here. A real UART drives the line at a baud rate far below
+// the fabric clock: gate the loop body behind a baud-tick enable (assert it once
+// every clk/baud cycles) and this same machine transmits at that rate.
+//
+// Timing (as in every Cg FSM): a port reflects the register at the START of the
+// cycle, so publish the CURRENT line bit and `busy` BEFORE updating the shift
+// register — a just-computed next bit would read back one cycle late. The
+// registers are inline-initialized (no setup(), which would add a reset state
+// that offsets the whole stream by a cycle).
+//
+// Note the line bit is written straight from the bit-select (`tx.write(frame[0])`)
+// — for a `bool` port, write the bit itself; don't compare it (`frame[0] == 1`).
+task UartTx {
+    properties {
+        test: {
+            //       load  |-------- serial frame for 0x53 ('S') --------|  idle
+            send: [ 1,    0,  0,  0,  0,  0,  0,  0,  0,  0,  0,   0 ],
+            data: [ 0x53, 0,  0,  0,  0,  0,  0,  0,  0,  0,  0,   0 ],
+            //       idle  st  d0  d1  d2  d3  d4  d5  d6  d7 stop idle
+            tx:   [ 1,    0,  1,  1,  0,  0,  1,  0,  1,  0,  1,   1 ],
+            busy: [ 0,    1,  1,  1,  1,  1,  1,  1,  1,  1,  1,   0 ]
+        }
+    }
+
+    sync { in bool send; in u8 data; out bool tx; out bool busy; }
+
+    u10 frame = 0x3FF;   // 10-bit shift register; idle = all ones (line high)
+    u4  cnt   = 0;       // bits left to shift out (0 = idle / ready for a byte)
+
+    void loop() {
+        bool s = send.read();
+        u8   d = data.read();
+
+        // Moore outputs for the CURRENT state — published BEFORE the transition.
+        tx.write(frame[0]);      // the LSB is the bit currently on the wire
+        busy.write(cnt != 0);
+
+        if (cnt == 0) {
+            if (s) {
+                // frame = { stop=1 (bit9) | data (bits 8..1) | start=0 (bit0) }
+                frame = (u10) (0x200 | (((u10) d) << 1));
+                cnt = 10;
+            } else {
+                frame = 0x3FF;                       // hold idle high
+            }
+        } else {
+            frame = (u10) ((frame >> 1) | 0x200);    // shift LSB out, refill idle
+            cnt = cnt - 1;
+        }
+    }
+}

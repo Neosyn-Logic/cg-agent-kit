@@ -66,10 +66,17 @@ package com.example.demo;
   accumulating into a fixed-width variable needs a cast every step:
   `sum = (int<32>) (sum + x);`. Forgetting this ("cannot convert from i33 to
   i32") is the single most common validation error.
-- `*` is fine, but **`/` and `%` must be by a constant power of two** (they
-  compile to a shift / mask). A variable or non-power-of-two divisor is not
-  synthesizable — there is no hardware divider; precompute, use a power of two,
-  or restructure. (`x >> k` / `x & (k-1)` are the explicit forms.)
+- `*` is fine (single-cycle, maps to a DSP/multiplier). **`/` and `%` by a
+  constant POWER OF TWO** become a shift/mask and are always safe (`x / 4` →
+  `x >> 2`). **Any other divisor — a non-power-of-two constant like `x / 10`, or
+  a runtime value — has no inline datapath** in the open-source compiler: use the
+  multi-cycle `std.math.Divide` built-in, or seed a source-included divider with
+  `cg_example("divide")` (`Recip` / `Divide` / `SeqDiv`). The divisor must be
+  positive. **Watch out:** a non-power-of-two constant divisor is accepted by the
+  front end but its lowering fails, and the emitted module comes out WITHOUT the
+  division logic while `generate` still reports "Success!" — so it breaks
+  silently. (Single-cycle reciprocal-multiply lowering for any constant divisor
+  is a commercial Neosyn SDK feature — https://neosyn.io.)
 - **Shift amounts must be literal too** — `x << n` / `x >> n` can't take a
   runtime `n`. For a variable shift, build a barrel shifter (literal shifts
   gated by the amount bits); see gotcha #10 and `cg_example("barrel shift")`.
@@ -192,6 +199,16 @@ operations: a `while` loop, a `fence` (end-of-cycle barrier), an `idle(n)`
 (wait n cycles), or multiple gated port reads. The compiler infers one state
 per cycle of work. Use `cg_fsm` to see the result.
 
+For an explicit **control FSM** (a sequence/pattern detector, a protocol
+controller, a serial parser) — an enum state register plus next-state logic —
+read `cg_docs("fsm")` and seed `cg_example("fsm")` (`Seq1011`). Two timing rules
+the compiler enforces, and that break most first drafts: **(a)** a port reflects
+the register at the *start* of the cycle, so publish the CURRENT state and drive
+every output BEFORE the transition (writing a just-computed next state reads back
+one cycle late); **(b)** inline-initialize the state (`St st;` defaults to the
+first enum member) rather than a `setup()` body — a `setup()` compiles to a
+separate reset STATE that eats the first clock and offsets the whole stream.
+
 ```cg
 void loop() {
     while (counter < 5) {
@@ -248,8 +265,15 @@ state = Light.RED;      // qualified literal (same as RED)
 if (state == GREEN) ... // compares against the literal / its integer value
 ```
 
-**Limit:** enums are internal value types, not a port type. Publish a code
-(`u2`) on the port, not the enum itself.
+An **enum is a legal port type** — `out Light state;` works, and the port carries
+the enum's underlying width (`Light` → 2 bits). Both sides of a cross-actor link
+must see the *same* enum, so declare a shared enum in a `bundle` and reference it
+(`out push Ops.Op op;` … `in push Ops.Op op;`). A numeric test vector on an enum
+port is accepted (coerced to the enum), and the emitted Verilog/VHDL port is a
+plain `uN`/`std_logic_vector`. (Publishing a bare `uN` code instead is still fine
+for a pure debug/observation signal, but a typed enum port is clearer for an
+opcode/command/mode field that crosses actors.) An explicit underlying type widens
+the port: `enum Op : u4 { … }` → a 4-bit port.
 
 ---
 
@@ -364,13 +388,19 @@ the sim log. A passing `cg_simulate` (ok: true) means the asserts held.
 3. **`.read()` / `.write()` with parentheses**, not `.read` as a field.
 4. **Positional `consumer.reads(producer.port, ...)`** — not per-port
    `consumer.inPort.reads(...)`.
-5. **Enums are not port types.** Publish an integer code.
+5. **Enums ARE valid port types** (`out Light state;`) — the port carries the
+   enum's underlying width. For a cross-actor link, share the enum via a `bundle`
+   so both sides name the same type. (Older notes saying enums can't be ports are
+   stale.)
 6. **Don't cast inside an `assert` and compare to a wide literal** — pass the
    expected value as a parameter/constant of the right width.
 7. **Width is strict** — cast explicitly when narrowing, and re-cast each step
    when accumulating (`sum = (T)(sum + x)`).
-8. **`/` and `%` only by a constant power of two** — no hardware divider. For a
-   runtime divisor seed `cg_example("divide")` (`Recip` / `Divide` / `SeqDiv`).
+8. **`/` and `%` only by a constant POWER OF TWO** (→ shift/mask). A
+   non-power-of-two constant divisor lowers to nothing and leaves the emitted
+   module broken while still reporting "Success!" — treat it like a runtime
+   divisor and use the `std.math.Divide` built-in or `cg_example("divide")`
+   (`Recip` / `Divide` / `SeqDiv`).
 9. **`continue` / `break` work inside loops** (`while` and `for`, nested OK).
    Only outside a loop is an error.
 10. **No shift by a runtime amount.** `x << n` / `x >> n` need `n` to be a
@@ -380,6 +410,13 @@ the sim log. A passing `cg_simulate` (ok: true) means the asserts held.
 11. **A full-width unsigned `<` compares as signed.** `(u32)0xFFFFFFFF < 1`
     reads as `-1 < 1` (true). For a true unsigned compare, widen past the sign
     bit: `(u33)a < (u33)b`. Signed compares use an explicit `(int<32>)` cast.
+12. **Reading a `push` input conditionally doesn't work — use a `stream`, or read
+    every cycle.** A `push` port has no back-pressure, so a value you skip on a
+    cycle is lost. A `stream` (sync-ready) input CAN be read conditionally —
+    `if (cnt == 0) acc = bias.read();` while reading the other streams every cycle
+    works correctly (the handshake paces it, on both hardware and Fast-sim). Even
+    so, the simplest always-correct reduction reads every stream every cycle and
+    uses the value conditionally — seed `cg_example("reduction")` (`StreamDot`).
 
 ---
 

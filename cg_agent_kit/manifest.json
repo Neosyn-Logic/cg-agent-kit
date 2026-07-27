@@ -452,6 +452,335 @@
         "sim": true
       },
       "note": "std.fifo.SynchronousFIFO: `new ...({size,width})`; wire `fifo.reads(producer.dout)` + `consumer.reads(fifo.dout)`. Both ports are `stream` so the handshake auto-stalls (write blocks when full, read blocks when empty); the FIFO holds each element until read. Verified on BOTH bytecode and iverilog."
+    },
+    {
+      "name": "MulStream",
+      "kind": "primitive",
+      "family": "arith",
+      "ops": [
+        "mul",
+        "multiply",
+        "stream",
+        "product"
+      ],
+      "tags": [
+        "multiply",
+        "multiplier",
+        "mul",
+        "product",
+        "a*b",
+        "times",
+        "registered-multiply",
+        "dsp-multiply",
+        "full-width-product"
+      ],
+      "use_when": "stream two runtime operands through the std.math.Multiply built-in for a registered full-width signed product",
+      "adapt": "change the operand/product widths (product is 2x the operand width); swap std.math.Multiply for std.math.Divide for a runtime divider",
+      "verified": {
+        "sim": true,
+        "yosys_cells": 3
+      },
+      "note": "std.math.Multiply built-in: a registered (1-cycle) full-width signed product, DSP-mapped. The feeder/sink tasks bridge the network's external `push` ports onto the built-in's `stream` (valid+ready) handshake, so the multiplier's back-pressure paces the source automatically. A single task that wrote both operands and read the product would DROP a vector (the built-in is registered with no input FIFO). Verified: bytecode sim 4/4 + yosys REAL."
+    },
+    {
+      "name": "ScaleGen",
+      "kind": "primitive",
+      "family": "generics",
+      "ops": [
+        "generic",
+        "parameterize",
+        "monomorphize"
+      ],
+      "tags": [
+        "generic",
+        "generics",
+        "parameterized",
+        "parameter",
+        "template",
+        "monomorphize",
+        "new-with-params",
+        "const-param",
+        "reusable-width"
+      ],
+      "use_when": "parameterize a task by compile-time const(s) and instantiate it with new Foo({param}) — a distinct specialized module per parameter set, no runtime cost",
+      "adapt": "change the const params and the {..} override at the instantiation site; add more const params; widths propagate through expressions",
+      "verified": {
+        "sim": true,
+        "yosys_cells": 65
+      },
+      "note": "Generics in C⏚ = `const` params on a task + `new Scale({k: 5, w: 16})` monomorphization. Each distinct {..} makes a separate specialized module (here `Scale`), baked in at elaboration — no runtime mux or cost. Use `uint<W>` (not `u<W>`) for a parameterized width; the output width `2*w` propagates automatically. Verified: bytecode sim + yosys REAL."
+    },
+    {
+      "name": "StreamDot",
+      "kind": "primitive",
+      "family": "arith",
+      "ops": [
+        "reduce",
+        "mac",
+        "dot",
+        "accumulate",
+        "sum"
+      ],
+      "tags": [
+        "reduction",
+        "reduce",
+        "dot-product",
+        "dot",
+        "mac",
+        "multiply-accumulate",
+        "accumulate",
+        "running-sum",
+        "streaming-reduction",
+        "emit-once-per-group",
+        "windowed"
+      ],
+      "use_when": "stream a reduction (dot product / MAC / running sum) that consumes M inputs per group and emits one result; read every input stream unconditionally each cycle and gate only the emit with a counter",
+      "adapt": "change M (the group length) and the accumulator width; drop the multiply for a plain grouped sum; for a per-group scalar (bias) read it every cycle and use it only at cnt==0 (never read a stream inside an if); operands may be signed or unsigned (signed inline a*b of stream inputs works on the current toolchain; on releases <= 2.9.0 keep them unsigned or use std.math.Multiply)",
+      "verified": {
+        "sim": true,
+        "yosys_cells": 47
+      },
+      "note": "Streaming reduction, emit-once-per-group. Both input streams are read on EVERY cycle; the accumulator is flushed and cleared on the last element of each group (cnt==M-1). A per-group side input read conditionally (e.g. a bias read only at cnt==0) works when it is a stream (its ready/valid handshake paces it); a push input read conditionally drops the skipped values (no back-pressure). Reading every cycle is the simplest shape and works for both. Operands may be signed or unsigned (this example uses unsigned for portability; a signed inline multiply of stream inputs works on the current toolchain, and on releases <= 2.9.0 needs unsigned or std.math.Multiply). Verified: bytecode sim 2/2 + yosys REAL (47 cells) + iverilog elaborates."
+    },
+    {
+      "name": "Seq1011",
+      "kind": "primitive",
+      "family": "control",
+      "ops": [
+        "fsm",
+        "state-machine",
+        "sequence-detect",
+        "enum-state"
+      ],
+      "tags": [
+        "fsm",
+        "state-machine",
+        "sequence-detector",
+        "pattern-match",
+        "controller",
+        "moore",
+        "mealy",
+        "enum-state",
+        "detector",
+        "serial",
+        "protocol"
+      ],
+      "use_when": "a control FSM: an explicit enum state register + next-state logic in loop() (sequence/pattern detector, protocol controller, serial parser)",
+      "adapt": "change the state set and the transition table; publish outputs for the CURRENT state BEFORE transitioning; keep the enum internal and expose an integer code on the port; add input streams for a wider datapath",
+      "verified": {
+        "sim": true,
+        "yosys_cells": 18
+      },
+      "note": "The canonical control-FSM shape. State is an ENUM (named, self-documenting); this example exposes it as an integer `scode` (u2), the simplest shape for a debug signal — but an enum is ALSO a valid port type (`out St scode` carries the enum's 2-bit width directly), and a bundle-shared enum lets both sides of a cross-actor link name it. Two timing rules the compiler enforces: (1) a port reflects the register at the START of the cycle, so publish the current state and drive every output BEFORE the transition (writing a just-computed next state reads back one cycle late); (2) inline-initialize state (`St st;` defaults to the first member) instead of a setup() body — a setup() compiles to a separate reset STATE that eats the first clock and offsets the whole stream. `found` is a Mealy output (current state AND the incoming bit); `scode` is Moore (current state). Verified: bytecode sim 8/8 + yosys REAL (18 cells: adff/adffe state regs, eq compares, mux next-state tree) + iverilog elaborates."
+    },
+    {
+      "name": "UartTx",
+      "kind": "primitive",
+      "family": "control",
+      "ops": [
+        "fsm",
+        "shift-register",
+        "serialize",
+        "stateful"
+      ],
+      "tags": [
+        "uart",
+        "serial",
+        "transmitter",
+        "tx",
+        "shift-register",
+        "framing",
+        "start-bit",
+        "stop-bit",
+        "baud",
+        "protocol",
+        "controller",
+        "fsm"
+      ],
+      "use_when": "serialize a byte onto a one-bit line, one bit per clock (UART TX, or any start/data/stop framed serial output)",
+      "adapt": "change the frame width/order (add parity, 2 stop bits, MSB-first); gate the loop body behind a baud-tick enable for a real line rate; widen `data` for more bits",
+      "verified": {
+        "sim": true,
+        "yosys_cells": 16
+      },
+      "note": "A control FSM whose state is a shift register (`frame`, a u10) + a bit counter (`cnt`) rather than a named enum — the right shape when the state is just 'how many bits are left'. Idle line high; on `send` the byte is framed start(0)+8 data LSB-first+stop(1) and shifted out a bit per clock, `busy` high while in flight. Same two timing rules as any Cg FSM: publish the CURRENT line bit and busy BEFORE updating `frame` (a just-computed next bit reads back a cycle late); inline-init the registers (no setup(), which adds a reset state that offsets the stream). Write the line straight from the bit-select (`tx.write(frame[0])`) — for a bool port, write the bit itself, do not compare it (`frame[0] == 1`). One bit = one clock; gate the body behind a baud-tick enable for a real baud rate. Pair it with `UartRx` to get a full link. Verified: bytecode sim 12/12 (frame for 0x53) + yosys REAL (16 coarse cells; 49 cells / 16 FFs after full `synth -flatten` — the 10-bit frame + 4-bit counter + registered outputs) + iverilog elaborates."
+    },
+    {
+      "name": "UartRx",
+      "kind": "primitive",
+      "family": "control",
+      "ops": [
+        "fsm",
+        "shift-register",
+        "deserialize",
+        "stateful"
+      ],
+      "tags": [
+        "uart",
+        "serial",
+        "receiver",
+        "receive",
+        "rx",
+        "deserialize",
+        "shift-register",
+        "framing",
+        "start-bit",
+        "stop-bit",
+        "oversample",
+        "baud",
+        "protocol",
+        "controller",
+        "fsm"
+      ],
+      "use_when": "deserialize a one-bit line back into a byte (UART RX, or any start/data/stop framed serial input)",
+      "adapt": "change the frame width/order (parity, 2 stop bits, MSB-first); add an `out bool err` on the bad-stop branch; drive the machine from a 16x oversample tick instead of every clock for a real asynchronous line",
+      "verified": {
+        "sim": true,
+        "yosys_cells": 30
+      },
+      "note": "The exact pair to UartTx, and the deserialize half of the serial family. A falling edge (start bit) arms it, 8 cycles shift in LSB-first, the 10th cycle carries the stop bit; `valid` pulses ONE cycle when a frame is accepted. State is a shift register + bit counter, not a named enum. TWO things to get right: (1) FRAMING — the byte is committed only if the stop bit is HIGH, so a bad frame is shifted in then dropped (`data` keeps its old value, `valid` never fires); hang an `out bool err` off that else-branch to report it. (2) `data` HOLDS the last ACCEPTED byte between frames, so ALWAYS qualify it with `valid` — reading `data` on an arbitrary cycle gives a stale byte. One bit = one clock here so it pairs cycle-for-cycle with UartTx; a real asynchronous line needs 16x oversampling and mid-bit sampling, which you get by advancing this same FSM from a sample tick instead of every clock. Same two Cg FSM timing rules: publish CURRENT outputs before the transition; inline-init (no setup()). Verified: bytecode sim 24 vectors / 72 checks — accepts 0x53 AND rejects a frame with a corrupted stop bit (busy rises for it, but `data` never becomes 0x41) + yosys REAL (30 coarse cells; 62 cells / 32 FFs after full `synth -flatten`) + iverilog elaborates."
+    },
+    {
+      "name": "Crc8",
+      "kind": "primitive",
+      "family": "control",
+      "ops": [
+        "crc",
+        "checksum",
+        "lfsr",
+        "shift-register",
+        "xor-feedback"
+      ],
+      "tags": [
+        "crc",
+        "crc8",
+        "crc16",
+        "crc32",
+        "checksum",
+        "lfsr",
+        "prng",
+        "scrambler",
+        "polynomial",
+        "galois",
+        "error-detection",
+        "hash",
+        "parity"
+      ],
+      "use_when": "a CRC / checksum over a serial bit stream, or the XOR-feedback shift register behind any LFSR, scrambler or pseudo-random generator",
+      "adapt": "change POLY and the width of `rem`/`crc` together (CRC-16-CCITT: u16 + 0x1021; CRC-32: u32 + 0x04C11DB7); init 0xFF for CRC-8/CDMA2000; drop `din` to get a plain LFSR/PRNG; unroll the body 8x over a byte for a byte-parallel CRC (the compiler flattens it to one XOR tree per output bit)",
+      "verified": {
+        "sim": true,
+        "yosys_cells": 13
+      },
+      "note": "The XOR-feedback shift register, one bit per clock, MSB-first: the top bit of the remainder XORed with the incoming bit forms the feedback, the remainder shifts left, and POLY is XORed back in when the feedback is 1. Defaults are CRC-8/ATM (poly 0x07, init 0x00). `init` clears for a new message; `en` GATES the machine so the remainder HOLDS between bursts (drive it from a link's data-valid strobe — e.g. UartRx's `valid`). THE KEY PROPERTY: feed a message then feed the CRC it produced, and the remainder returns to 0 — so a receiver never compares checksums, it just runs message AND trailing CRC through this block and checks `crc == 0`. Note `bool ^ bool` on a bit-select (`rem[7] ^ b`) is legal Cg and is the idiomatic way to write the feedback. Verified against TWO independent oracles (bit-serial model and GF(2) polynomial long division, both giving CRC-8(0x53) = 0xBE): bytecode sim 20 vectors — 0x53 -> 0xBE, HOLDS 0xBE across an en=0 gap, then feeding 0xBE back gives residue 0x00 + yosys REAL (13 coarse cells; 33 cells / 17 FFs after full `synth -flatten`) + iverilog elaborates."
+    },
+    {
+      "name": "Debounce",
+      "kind": "primitive",
+      "family": "control",
+      "ops": [
+        "debounce",
+        "edge-detect",
+        "filter",
+        "stateful"
+      ],
+      "tags": [
+        "debounce",
+        "button",
+        "switch",
+        "edge-detector",
+        "rising-edge",
+        "falling-edge",
+        "pulse",
+        "one-shot",
+        "glitch-filter",
+        "input-conditioning",
+        "sensor",
+        "contact-bounce"
+      ],
+      "use_when": "clean up a noisy/asynchronous real-world input (button, switch, sensor, off-chip level) and turn changes into one-cycle rising/falling pulses",
+      "adapt": "N is in CLOCK CYCLES — a 10 ms filter at 100 MHz is N = 1_000_000, so widen `cnt` to match; set N=1 and it degenerates to a plain edge detector (the classic one-cycle delay register); gate the body behind a slow tick to count milliseconds instead of cycles; drop `stable` and keep `rise` for a clean one-shot 'button pressed' event",
+      "verified": {
+        "sim": true,
+        "yosys_cells": 21
+      },
+      "note": "The canonical input-conditioning block — put it between ANY asynchronous real-world input and the rest of the design, or an FSM will see thousands of cycles of contact chatter as dozens of spurious events. State is a counter of how long the input has DISAGREED with the accepted level: disagreement counts up, agreement resets it to zero, reaching N flips the level and emits a ONE-CYCLE `rise`/`fall` pulse. A glitch shorter than N therefore leaves no trace at all. This IS also the edge detector — debounce is just edge detection with hysteresis, so N=1 gives you the plain one-cycle-delay version. Same two Cg FSM timing rules: publish CURRENT level and pulses before the transition; inline-init (no setup()). Verified: bytecode sim 26 vectors / 78 checks — a 3-cycle glitch against N=4 is REJECTED outright (`stable` never moves), a sustained change is accepted after exactly N cycles, and there is exactly ONE rise and ONE fall pulse in the whole trace + yosys REAL (21 coarse cells; 34 cells / 11 FFs after full `synth -flatten`) + iverilog elaborates."
+    },
+    {
+      "name": "Pwm",
+      "kind": "primitive",
+      "family": "control",
+      "ops": [
+        "pwm",
+        "counter",
+        "compare",
+        "clock-divider",
+        "tick"
+      ],
+      "tags": [
+        "pwm",
+        "duty-cycle",
+        "clock-divider",
+        "rate-divider",
+        "prescaler",
+        "tick",
+        "strobe",
+        "enable",
+        "baud-tick",
+        "led",
+        "dimming",
+        "motor",
+        "servo",
+        "timer",
+        "periodic"
+      ],
+      "use_when": "generate a duty-cycled output (LED/motor/DAC/servo) OR divide a fast clock down to a slow one-cycle tick that gates another machine",
+      "adapt": "PERIOD is in CLOCK CYCLES — widen `cnt` to hold it (868 needs u10, 100_000 needs u17); drop duty/pwm/dreg for a pure clock divider; count up-then-down for centre-aligned PWM; instantiate per channel with new Pwm({PERIOD: n})",
+      "verified": {
+        "sim": true,
+        "yosys_cells": 13
+      },
+      "note": "Counter + compare — the two things you build from a free-running counter. `pwm` is high for the first `duty` of every PERIOD cycles; `tick` is a one-cycle wrap pulse. THE `tick` IS THE RATE DIVIDER the UartTx/UartRx notes point at when they say 'gate the loop body behind a baud-tick enable': at 100 MHz a 115200-baud UART needs a bit every 868 cycles, so PERIOD=868 and wire `tick` to the UART's enable — the UART FSM is unchanged. THE PART PEOPLE GET WRONG: `duty` is LATCHED into `dreg` at the period boundary, not compared live; using the live input lets a mid-period change cut a pulse short and emit a runt cycle that shows up as flicker. Both outputs are pure Moore precisely because of that latch. Verified: bytecode sim 24 vectors / 48 checks — `duty` is deliberately changed MID-period and the period in flight is proven undisturbed (period 2 keeps duty 3, period 3 picks up 6), tick lands exactly every PERIOD + yosys REAL (13 coarse cells; 41 cells / 12 FFs after full `synth -flatten`) + iverilog elaborates."
+    },
+    {
+      "name": "SpiMaster",
+      "kind": "primitive",
+      "family": "control",
+      "ops": [
+        "spi",
+        "fsm",
+        "shift-register",
+        "serialize",
+        "deserialize",
+        "clock-gen"
+      ],
+      "tags": [
+        "spi",
+        "master",
+        "sclk",
+        "mosi",
+        "miso",
+        "chip-select",
+        "csn",
+        "full-duplex",
+        "synchronous-serial",
+        "adc",
+        "dac",
+        "flash",
+        "sensor",
+        "display",
+        "protocol",
+        "mode0",
+        "cpol",
+        "cpha"
+      ],
+      "use_when": "drive an SPI bus as master (ADC, DAC, flash, sensor, display controller) — clock out a byte and clock one in at the same time",
+      "adapt": "invert `sclk` for mode 3 (CPOL=1), swap which half samples/shifts for the CPHA=1 modes; widen sh/rsh/tx/rx and `cnt` for 16- or 24-bit frames; hold `csn` low across several bytes for multi-byte flash/display transactions; one `csn` per slave sharing sclk/mosi/miso; gate the body behind a Pwm `tick` for a slower sclk",
+      "verified": {
+        "sim": true,
+        "yosys_cells": 48
+      },
+      "note": "The clock-GENERATING side of a synchronous serial bus, and the counterpart to the UART pair. SPI is FULL DUPLEX: one byte goes out on MOSI while another comes back on MISO in the same eight bit-times — there is no separate read transaction, which is why one `start` pulse carries both `tx` and `rx`. Unlike a UART the master owns the clock, so there is no baud agreement and no start/stop framing; `csn` frames the transfer instead. One SPI bit = TWO fabric clocks via the `ph` phase register: ph=0 sclk LOW (MOSI stable for the slave), ph=1 sclk HIGH (slave sampled MOSI on the rising edge, master samples MISO here, MOSI advances on the fall) — that is mode 0. `rx` HOLDS the last byte, so qualify it with `done`, same rule as UartRx's data/valid. sclk is fabric/2 here (the fastest possible); gate the body behind a Pwm tick to slow it. Verified: bytecode sim 21 vectors / 105 checks of a real full-duplex exchange — MOSI carries 0x53 MSB-first while 0xA5 is simultaneously clocked in, csn is low for exactly the 16 transfer cycles and high outside, one `done` pulse + yosys REAL (48 coarse cells; 84 cells / 43 FFs after full `synth -flatten`) + iverilog elaborates."
     }
   ]
 }

@@ -1,0 +1,87 @@
+package com.neosyn.examples.io;
+
+// Debouncer + edge detector — the canonical input-conditioning block, and the
+// thing to put between ANY asynchronous real-world input (button, switch,
+// opto/limit sensor, off-chip level) and the rest of your design.
+//
+// A mechanical contact does not switch cleanly: it chatters for milliseconds,
+// which at fabric speed is thousands of cycles of garbage. Feeding that straight
+// into an FSM produces dozens of spurious events. This block only accepts a new
+// level once it has held for N consecutive cycles, and emits a ONE-CYCLE `rise`
+// or `fall` pulse at the moment it does — so downstream logic gets a clean level
+// plus a clean event, and never sees the chatter.
+//
+// The state is a counter of how long the input has DISAGREED with the currently
+// accepted level: any disagreement counts up, any agreement resets it to zero,
+// and reaching N flips the level. A glitch shorter than N cycles therefore
+// leaves no trace at all — the test below proves that with a 3-cycle glitch
+// against N=4.
+//
+// This also IS the edge detector: if you only need "did this signal change",
+// set N=1 and the counter degenerates to the classic one-cycle delay register
+// (`rise` = din AND NOT previous). The debounce counter is just an edge detector
+// with hysteresis.
+//
+// TO ADAPT:
+//   * real debounce time — N is in CLOCK CYCLES; a 10 ms filter at 100 MHz is
+//     N = 1_000_000, so widen `cnt` to match (u20 here). Widen the type and the
+//     const together; the compare stays the same.
+//   * a `tick` enable — for very long filters, count milliseconds instead of
+//     cycles: gate the loop body behind a slow tick and keep N small.
+//   * one-shot only — drop `stable` and keep `rise` as a clean "button pressed"
+//     event.
+//
+// Timing (as in every Cg FSM): a port reflects the register at the START of the
+// cycle, so publish the CURRENT level and pulses BEFORE updating them — a
+// just-computed pulse would read back one cycle late. The registers are
+// inline-initialized (no setup(), which would add a reset state that offsets
+// the whole stream).
+task Debounce {
+    properties {
+        test: {
+            //         idle |3-cyc GLITCH| lo |--- sustained HIGH ---| glitch  |------ sustained LOW ------|
+            din:    [ 0,     1,  1,  1,    0,   1, 1, 1, 1, 1, 1, 1, 1,  0, 0, 1,  0, 0, 0, 0, 0, 0, 0, 0, 0, 0 ],
+            // the 3-cycle glitch is REJECTED outright — `stable` never moves for it
+            stable: [ 0,     0,  0,  0,    0,   0, 0, 0, 0, 1, 1, 1, 1,  1, 1, 1,  1, 1, 1, 1, 0, 0, 0, 0, 0, 0 ],
+            rise:   [ 0,     0,  0,  0,    0,   0, 0, 0, 0, 1, 0, 0, 0,  0, 0, 0,  0, 0, 0, 0, 0, 0, 0, 0, 0, 0 ],
+            fall:   [ 0,     0,  0,  0,    0,   0, 0, 0, 0, 0, 0, 0, 0,  0, 0, 0,  0, 0, 0, 0, 1, 0, 0, 0, 0, 0 ]
+        }
+    }
+
+    const int N = 4;         // a change must hold this many cycles to be accepted
+
+    sync { in bool din; out bool stable; out bool rise; out bool fall; }
+
+    bool cur = false;        // the accepted (debounced) level
+    u4   cnt = 0;            // cycles the input has DISAGREED with `cur`
+    bool r   = false;        // one-cycle rising-edge pulse
+    bool f   = false;        // one-cycle falling-edge pulse
+
+    void loop() {
+        bool d = din.read();
+
+        // Moore outputs for the CURRENT state — published BEFORE the transition.
+        stable.write(cur);
+        rise.write(r);
+        fall.write(f);
+
+        r = false;
+        f = false;
+
+        if (d != cur) {
+            if (cnt == N - 1) {
+                cur = d;                    // held long enough -> accept the new level
+                cnt = 0;
+                if (d) {
+                    r = true;
+                } else {
+                    f = true;
+                }
+            } else {
+                cnt = cnt + 1;
+            }
+        } else {
+            cnt = 0;                        // agreed again -> the glitch is discarded
+        }
+    }
+}

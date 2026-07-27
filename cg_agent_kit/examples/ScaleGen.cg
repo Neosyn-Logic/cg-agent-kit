@@ -1,0 +1,34 @@
+package t;
+// Generic scaler: `new Scale({k, w})` bakes the factor k and width w in at
+// elaboration — each instantiation is a DISTINCT module, no runtime cost. This
+// is how generics work in C⏚: `const` params + new Foo({param}) monomorphization.
+task Scale {
+    const int k = 3;
+    const int w = 8;
+    in stream uint<w> x;
+    out stream uint<2*w> y;
+    void loop() { y.write(x.read() * k); }
+}
+network ScaleGen {
+    properties { test: { terminate: "mon.finished" } }
+
+    s = new Scale({k: 5, w: 16});      // *5, 16-bit in -> 32-bit out
+
+    src = new task {
+        out stream uint<16> v;
+        void setup() { v.write(2); v.write(7); v.write(100); }
+    };
+    s.reads(src.v);
+
+    mon = new task {
+        in stream uint<32> r;
+        bool finished;
+        void setup() {
+            assert(r.read() == 10);    // 2*5
+            assert(r.read() == 35);    // 7*5
+            assert(r.read() == 500);   // 100*5
+            finished = true;
+        }
+    };
+    mon.reads(s.y);
+}

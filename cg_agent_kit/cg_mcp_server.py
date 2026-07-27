@@ -792,6 +792,24 @@ _DOCS = {
     "context": (_HERE / "cg_context.md",
                 "Core C⏚ language knowledge pack: mental model, types, ports, "
                 "structs/enums/generics, stdlib, and first-draft gotchas."),
+    "handshakes": (_HERE / "cg_handshakes.md",
+                "Port protocols (bare / push / stream / confirm), back-pressure, "
+                "connecting instances with .reads(), and THE pacing gotcha: feeding a "
+                "registered built-in (Multiply/Divide) too fast drops data — use the "
+                "feeder/sink pattern or idle() spacing. Read before wiring a network."),
+    "arithmetic": (_HERE / "cg_arithmetic.md",
+                "What *, /, %, <<, >> synthesize to and when they need a built-in: "
+                "full-width multiply + std.math.Multiply, the power-of-two-only limit "
+                "on constant division, std.math.Divide for every other divisor, and "
+                "barrel shift for runtime shifts. Read before writing math."),
+    "fsm":     (_HERE / "cg_fsm.md",
+                "Writing a control FSM (sequence/pattern detector, protocol "
+                "controller, serial parser, UART/SPI): enum state register + "
+                "next-state logic, Moore vs Mealy outputs, and the two timing rules "
+                "that break first drafts — publish the CURRENT state before "
+                "transitioning, and inline-init state instead of setup() (a setup() "
+                "body adds a reset state that offsets the stream). Seeds the verified "
+                "Seq1011 example."),
     "riscv":   (_HERE / "cg_riscv.md",
                 "The C⏚ RV32I reference CPU: the loadable single-cycle core, its "
                 "demo programs, and the reusable patterns for building CPU-shaped "
@@ -938,6 +956,18 @@ _FAIL_HINTS = [
      "SeqDiv",
      "a data-dependent loop bound can't unroll — seed SeqDiv, a sequential FSM "
      "that reuses one stage over N cycles (a streaming-accumulator shape)."),
+    (re.compile(r"single combinational multiplier|std\.math\.Multiply|wider than one DSP", re.I),
+     "MulStream",
+     "a wide runtime multiply is a single combinational product spanning more than "
+     "one DSP tile; if it misses timing, seed MulStream — the registered "
+     "std.math.Multiply built-in fed through a stream handshake. For a multiply-"
+     "accumulate over a stream, seed StreamDot instead."),
+    (re.compile(r"division by|IllegalArgumentException — division", re.I),
+     "SeqDiv",
+     "the open-source compiler only lowers `/` and `%` by a constant POWER OF TWO; "
+     "any other constant fails here and leaves the emitted module without the "
+     "division logic even though generate reports Success. Use the std.math.Divide "
+     "built-in, or seed SeqDiv / Divide / Recip for a source-included divider."),
 ]
 
 
@@ -1178,7 +1208,14 @@ def build_server():
     def cg_docs(topic: str = "") -> dict:
         """Fetch a markdown knowledge doc. No topic → an index of available
         topics with descriptions; a topic → its full content. Topics:
-        'context' (the core C⏚ language pack — load before writing any Cg) and
+        'context' (the core C⏚ language pack — load before writing any Cg);
+        'handshakes' (port protocols push/stream/confirm, back-pressure, and the
+        pacing gotcha when feeding a registered built-in — read before wiring a
+        network); 'arithmetic' (what *, /, %, <<, >> synthesize to and when they
+        need a std.math built-in or a barrel shifter — read before writing
+        math); 'fsm' (control FSMs: enum state register, Moore vs Mealy, and the
+        two timing rules that break first drafts — read before writing a
+        sequencer, protocol controller or serial block like UART/SPI); and
         'riscv' (the worked RV32I CPU reference: the loadable single-cycle core
         and the reusable patterns for CPU-shaped hardware in Cg — barrel
         shifter, signed/unsigned widening, sub-word load/store, count-prefixed
