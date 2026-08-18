@@ -31,4 +31,4 @@ cg-mcp-server = "cg_agent_kit.cg_mcp_server:main"
 packages = ["cg_agent_kit"]
 
 [tool.setuptools.package-data]
-cg_agent_kit = ["*.md", "*.json", "examples/*.cg"]
+cg_agent_kit = ["*.md", "*.json", "examples/*.cg", "examples/*.md"]
