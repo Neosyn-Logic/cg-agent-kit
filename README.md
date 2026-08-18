@@ -23,7 +23,7 @@ compiles to clean, standard Verilog. The compiler is open source at
 | `cg_generate_verilog` | Emit synthesizable Verilog |
 | `cg_simulate` | Simulate a design (`iverilog` backend, or the commercial fast sim) |
 | `cg_synth` | Yosys-synthesize the Verilog: REAL / FOLDED / SUSPECT verdict + cell count |
-| `cg_example` | Scored lookup into a curated, **validated-code dictionary** (18 entries) |
+| `cg_example` | Scored lookup into a curated, **validated-code dictionary** (28 entries) |
 | `cg_suggest_for_error` | Map a compiler error to the recipe with the fix pattern |
 | `cg_fsm` / `cg_graph` | A task's compiled state machine / a network's graph |
 | `cg_docs` | C⏚ language + patterns reference |
@@ -83,7 +83,7 @@ print(cg.check(open("Counter.cg").read()))
 print(cg.generate(open("Counter.cg").read()))
 ```
 
-The kit bundles 18 validated C⏚ designs and the language + CPU-pattern
+The kit bundles 28 validated C⏚ designs and the language + CPU-pattern
 references the `cg_docs` tool serves.
 
 ## License
