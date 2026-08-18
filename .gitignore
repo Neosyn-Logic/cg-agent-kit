@@ -17,3 +17,6 @@ fpga/build/
 cg_agent_kit/examples/sim/
 cg_agent_kit/examples/verilog-gen/
 cg_agent_kit/examples/.accelone/
+
+# throwaway venv used to build/publish releases
+.venv-build/
