@@ -1,4 +1,6 @@
 # C⏚ agent kit — MCP server dependency.
 # The core verification functions in cg_mcp_server.py use only the stdlib;
 # `mcp` is needed only to run it as an MCP server.
+# Works on both 1.x and 2.x: build_server() shims the FastMCP ->
+# MCPServer rename that 2.0 made.
 mcp>=1.0

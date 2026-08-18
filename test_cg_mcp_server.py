@@ -287,6 +287,66 @@ class TestExampleLibrary(unittest.TestCase):
         self.assertFalse(cg.suggest_for_error("totally unrelated message")["ok"])
 
 
+
+class TestCapabilitiesAndInstructions(unittest.TestCase):
+    """This package is installed by open-source users AND by customers of the
+    commercial distribution, whose correct simulator guidance is the opposite.
+    A fixed line is therefore wrong for one audience, so the guidance is probed.
+    These tests pin the branch logic without needing either jar."""
+
+    def setUp(self):
+        self._probe = cg._BYTECODE_PROBE
+
+    def tearDown(self):
+        cg._BYTECODE_PROBE = self._probe
+
+    def _with(self, available, reason="ok"):
+        cg._BYTECODE_PROBE = {"available": available, "reason": reason, "detail": ""}
+        return cg.capabilities()
+
+    def test_bytecode_present_is_recommended_not_iverilog(self):
+        # The paying half must NOT be steered off their fast simulator.
+        c = self._with(True)
+        self.assertIn("bytecode", c["simulators"])
+        self.assertIn("bytecode", c["advice"])
+        ins = cg.build_instructions()
+        self.assertIn('simulator="bytecode"', ins)
+        self.assertNotIn("is NOT in this compiler", ins)
+
+    def test_bytecode_absent_falls_to_iverilog_guidance(self):
+        c = self._with(False, "not-in-jar")
+        self.assertNotIn("bytecode", c["simulators"])
+        ins = cg.build_instructions()
+        self.assertIn('simulator="iverilog"', ins)
+        self.assertIn("Test", ins)   # the capital-T testbench-naming trap
+
+    def test_instructions_never_break_the_server(self):
+        # A probe failure must degrade to neutral advice, not raise: the string
+        # is built while the server is starting up.
+        orig = cg.capabilities
+        try:
+            cg.capabilities = lambda: (_ for _ in ()).throw(RuntimeError("boom"))
+            ins = cg.build_instructions()
+            self.assertIn("cg_capabilities", ins)
+        finally:
+            cg.capabilities = orig
+
+    def test_missing_jar_reported_as_such(self):
+        jar, cg._BYTECODE_PROBE = cg.JAR, None
+        try:
+            cg.JAR = cg.Path("/nonexistent/cg.jar")
+            r = cg.probe_bytecode(force=True)
+            self.assertFalse(r["available"])
+            self.assertEqual(r["reason"], "jar-missing")
+        finally:
+            cg.JAR, cg._BYTECODE_PROBE = jar, None
+
+    def test_docstring_no_longer_claims_a_fallback(self):
+        # It never fell back — it returns a pointer. The claim was untrue and
+        # would have a model wait for an iverilog run that never happens.
+        self.assertNotIn("falls back to the 'iverilog' backend", cg.__doc__)
+
+
 # ============================================================ INTEGRATION TESTS
 @unittest.skipUnless(JAR_OK, "compiler jar not built")
 class TestCheck(unittest.TestCase):

@@ -18,12 +18,21 @@ Tools exposed:
   cg_suggest_for_error map a compiler error to the recipe with the fix pattern
   cg_fsm               a task's compiled state machine (states/transitions)
   cg_graph             a network's compiled graph (instances/ports/edges)
+  cg_capabilities      what this host can actually do (probed, not assumed)
 
-The jar is the open-source C⏚ Verilog compiler (github.com/Neosyn-Logic/
-cg-compiler), found via $CG_JAR or the default build path. It needs no
-license. The fast bytecode simulator is part of the commercial Neosyn
-distribution; without it, cg_simulate falls back to the 'iverilog' backend
-(generate Verilog + run Icarus Verilog).
+The jar is found via $CG_JAR or the default build path. The open-source C⏚
+compiler (github.com/Neosyn-Logic/cg-compiler) needs no license; the
+commercial Neosyn distribution additionally provides the fast bytecode
+simulator, which the open-source build does not have.
+
+This kit is used against BOTH, so it does not assume which one you have: it
+PROBES. Call cg_capabilities (or capabilities()) for the answer here. Where
+the bytecode simulator exists it is the default and the right tool —
+'iverilog' is a slower Verilog-level cross-check. Where it does not,
+cg_simulate returns `available: False` with a pointer; note that it does NOT
+silently fall back, because the iverilog backend needs a differently shaped
+testbench (a network whose NAME contains "Test") and a quiet switch would
+look like a passing run of something you did not ask for.
 
 The core functions (check/simulate/generate/fsm/graph) have no MCP
 dependency, so they can be unit-tested directly:
@@ -214,12 +223,93 @@ def check(source: str, extra_files: dict | None = None,
                    else f"{len(diags) or 'unknown'} error(s)"})
 
 
+# ------------------------------------------------- what is available HERE
+# This kit ships to open-source users AND to customers of the commercial
+# distribution, and the right simulator guidance is opposite in the two. A
+# flat claim is therefore wrong for one audience -- telling a paying customer
+# their fast simulator does not exist steers them onto the slow backend for no
+# reason. So probe, and phrase the guidance from what is actually here.
+_PROBE_SRC = """package cg.probe;
+task Probe {
+    properties { test: { inp: [ 1 ], outp: [ 1 ] } }
+    in sync u8 inp; out sync u8 outp;
+    void loop() { outp.write(inp.read()); }
+}
+"""
+_BYTECODE_PROBE = None
+
+
+def probe_bytecode(force: bool = False, timeout: int = 60) -> dict:
+    """Is the fast bytecode simulator actually runnable HERE?
+
+    Runs one trivial self-checking design and classifies the outcome. Cached
+    for the process (force=True re-probes). Returns {available, reason, detail}
+    with `reason` in: ok / jar-missing / not-in-jar / failed."""
+    global _BYTECODE_PROBE
+    if _BYTECODE_PROBE is not None and not force:
+        return _BYTECODE_PROBE
+    if not JAR.is_file():
+        res = {"available": False, "reason": "jar-missing",
+               "detail": f"no compiler jar at {JAR} (set $CG_JAR)"}
+    else:
+        try:
+            rc, out, to, _ = _run("simulate", _PROBE_SRC, timeout=timeout)
+        except Exception as e:                                  # pragma: no cover
+            rc, out, to = 1, f"probe failed to run: {e}", False
+        low = out.lower()
+        if "unknown command" in low:
+            res = {"available": False, "reason": "not-in-jar",
+                   "detail": "this compiler has no `simulate` verb -- the fast "
+                             "bytecode simulator is part of the commercial "
+                             "Neosyn distribution (neosyn.io), not the "
+                             "open-source build."}
+        elif rc == 0 and not to and "completed successfully" in low:
+            res = {"available": True, "reason": "ok", "detail": ""}
+        else:
+            res = {"available": False, "reason": "failed",
+                   "detail": _clean(out, limit=8) or f"exit {rc}, timed_out={to}"}
+    _BYTECODE_PROBE = res
+    return res
+
+
+def capabilities() -> dict:
+    """What this host can actually do, probed rather than assumed."""
+    bc = probe_bytecode()
+    tools = {name: shutil.which(name) for name in
+             ("iverilog", "vvp", "verilator", "yosys", "ghdl")}
+    sims = ["bytecode"] if bc["available"] else []
+    if tools["iverilog"] and tools["vvp"]:
+        sims.append("iverilog")
+    if bc["available"]:
+        advice = ("Use the default simulator='bytecode': the fast "
+                  "cycle-accurate simulator, no HDL toolchain needed. Reach "
+                  "for 'iverilog' only as a slower Verilog-level cross-check.")
+    elif "iverilog" in sims:
+        advice = ("The fast bytecode simulator is not available here "
+                  f"({bc['reason']}), so pass simulator='iverilog'. It emits a "
+                  "testbench only for a network whose NAME contains 'Test' "
+                  "(capital T), and needs a driver that terminates.")
+    else:
+        advice = ("No simulator is available here: the bytecode simulator is "
+                  f"absent ({bc['reason']}) and iverilog/vvp are not installed. "
+                  "cg_check and cg_generate_verilog still work.")
+    return {"ok": True, "jar": str(JAR), "jar_present": JAR.is_file(),
+            "bytecode_simulator": bc, "simulators": sims,
+            "tools": {k: bool(v) for k, v in tools.items()},
+            "advice": advice}
+
+
 def simulate(source: str, extra_files: dict | None = None, timeout: int = 60,
              simulator: str = "bytecode", package_dir: str | None = None) -> dict:
     """Run a simulator on the design. `simulator` selects the backend:
 
-    - 'bytecode' (default) — the compiler's fast bytecode simulator. No HDL
-      toolchain needed; a `properties { test: {...} }` block self-checks.
+    - 'bytecode' (default) — the fast cycle-accurate simulator. No HDL
+      toolchain needed; a `properties { test: {...} }` block self-checks. It
+      ships with the commercial Neosyn distribution and is the right default
+      WHERE IT EXISTS; the open-source compiler has no `simulate` verb, and
+      there this call returns `available: False` with a pointer rather than a
+      design error. capabilities() reports which you have — this docstring
+      deliberately does not assert one, because the kit runs against both.
     - 'iverilog' — generate Verilog + testbench and run Icarus Verilog (`vvp`).
       A Verilog-level cross-check; needs a `network <Name>_test` so a testbench
       is emitted.
@@ -239,9 +329,12 @@ def simulate(source: str, extra_files: dict | None = None, timeout: int = 60,
         # a clear pointer rather than surfacing a raw "Unknown command".
         if "unknown command" in out.lower():
             return {"ok": False, "simulator": "bytecode", "commercial": True,
+                    "available": False, "reason": "not-in-jar",
                     "error": "The fast bytecode simulator is part of the commercial "
-                             "Neosyn SDK and is not in the open-source compiler. Use "
-                             "simulator='iverilog' for a Verilog-level check, or get "
+                             "Neosyn SDK and is not in the open-source compiler. "
+                             "Your design was not the problem. Use "
+                             "simulator='iverilog' for a Verilog-level check (it "
+                             "needs a network whose NAME contains 'Test'), or get "
                              "the SDK at https://neosyn.io."}
         diags = _diagnostics(out)
         passed = (rc == 0 and not to and not diags
@@ -1022,17 +1115,75 @@ Reliable workflow (writing Cg from scratch fails — this path works):
 High-cost gotchas (these waste the most turns — all observed live):
 - `const` must live INSIDE a task or bundle, never at top level after `package`.
 - There is no `import std.lib` — do not import it.
-- Simulation: the fast bytecode simulator is commercial and absent from the OSS
-  compiler — use simulator="iverilog". iverilog only emits a testbench when the
-  network NAME contains "Test" (capital T, e.g. `network TestConv`), and the
-  driver must terminate (no infinite loop) or the sim times out.
+"""
+
+# The simulation advice is the one piece that CANNOT be written down in
+# advance: this package is installed both by open-source users (no bytecode
+# simulator) and by customers of the commercial distribution (who have it, and
+# for whom it is the headline feature). A fixed line saying "it is absent, use
+# iverilog" is wrong for the paying half and pushes them onto the slow backend
+# for no reason. So probe at server start and say what is actually true here.
+_SIM_GUIDANCE_UNKNOWN = """- Simulation: call cg_capabilities FIRST to see which simulator this host has —
+  do not assume. iverilog only emits a testbench when the network NAME contains
+  "Test" (capital T, e.g. `network TestConv`), and the driver must terminate.
+"""
+
+_SIM_GUIDANCE_BYTECODE = """- Simulation: the fast bytecode simulator IS available here — use the default
+  simulator="bytecode". It is cycle-accurate, needs no HDL toolchain, and a
+  `properties { test: {...} }` block self-checks. Only reach for
+  simulator="iverilog" as a slower Verilog-level cross-check; it is not the
+  everyday tool.
+"""
+
+_SIM_GUIDANCE_IVERILOG = """- Simulation: the fast bytecode simulator is NOT in this compiler (it ships with
+  the commercial Neosyn distribution) — use simulator="iverilog". iverilog only
+  emits a testbench when the network NAME contains "Test" (capital T, e.g.
+  `network TestConv`), and the driver must terminate (no infinite loop) or the
+  sim times out.
 """
 
 
-def build_server():
-    from mcp.server.fastmcp import FastMCP
+def build_instructions() -> str:
+    """INSTRUCTIONS with the simulation advice resolved for THIS host."""
+    try:
+        caps = capabilities()
+        if caps["bytecode_simulator"]["available"]:
+            tail = _SIM_GUIDANCE_BYTECODE
+        elif "iverilog" in caps["simulators"]:
+            tail = _SIM_GUIDANCE_IVERILOG
+        else:
+            tail = _SIM_GUIDANCE_UNKNOWN
+    except Exception:      # never let a probe failure stop the server starting
+        tail = _SIM_GUIDANCE_UNKNOWN
+    return INSTRUCTIONS + tail
 
-    mcp = FastMCP("Neosyn Cg", instructions=INSTRUCTIONS)
+
+def build_server():
+    # `mcp` 2.0 renamed FastMCP -> MCPServer and removed mcp.server.fastmcp.
+    # The dependency is `mcp>=1.0`, so a fresh `pip install cg-agent-kit`
+    # resolves to 2.x and the old import made the server fail to START, taking
+    # every tool with it. The decorator and run() APIs are identical, so one
+    # shim covers both.
+    try:
+        from mcp.server.mcpserver import MCPServer as _Server   # mcp >= 2.0
+    except ImportError:                                          # pragma: no cover
+        from mcp.server.fastmcp import FastMCP as _Server        # mcp 1.x
+
+    mcp = _Server("Neosyn Cg", instructions=build_instructions())
+
+    @mcp.tool()
+    def cg_capabilities() -> dict:
+        """What this host can actually do — PROBED, not assumed. Call it before
+        deciding how to verify a design.
+
+        Returns {jar, jar_present, bytecode_simulator:{available,reason,detail},
+        simulators:[...], tools:{iverilog,vvp,verilator,yosys,ghdl}, advice}.
+
+        The fast bytecode simulator ships with the commercial Neosyn
+        distribution and is absent from the open-source compiler, so any fixed
+        claim about it is wrong for one of the two audiences. `advice` is
+        written from what was actually found here."""
+        return capabilities()
 
     @mcp.tool()
     def cg_check(source: str, extra_files: dict | None = None,
