@@ -68,15 +68,12 @@ package com.example.demo;
   i32") is the single most common validation error.
 - `*` is fine (single-cycle, maps to a DSP/multiplier). **`/` and `%` by a
   constant POWER OF TWO** become a shift/mask and are always safe (`x / 4` →
-  `x >> 2`). **Any other divisor — a non-power-of-two constant like `x / 10`, or
-  a runtime value — has no inline datapath** in the open-source compiler: use the
-  multi-cycle `std.math.Divide` built-in, or seed a source-included divider with
+  `x >> 2`). **A non-power-of-two CONSTANT divisor** (`x / 10`) is
+  also fine: it lowers to a single-cycle reciprocal multiply, `(x*M) >> s`. Only a
+  **RUNTIME divisor has no inline datapath** — for that use the multi-cycle
+  `std.math.Divide` built-in, or seed a source-included divider with
   `cg_example("divide")` (`Recip` / `Divide` / `SeqDiv`). The divisor must be
-  positive. **Watch out:** a non-power-of-two constant divisor is accepted by the
-  front end but its lowering fails, and the emitted module comes out WITHOUT the
-  division logic while `generate` still reports "Success!" — so it breaks
-  silently. (Single-cycle reciprocal-multiply lowering for any constant divisor
-  is a commercial Neosyn SDK feature — https://neosyn.io.)
+  positive.
 - **Shift amounts must be literal too** — `x << n` / `x >> n` can't take a
   runtime `n`. For a variable shift, build a barrel shifter (literal shifts
   gated by the amount bits); see gotcha #10 and `cg_example("barrel shift")`.

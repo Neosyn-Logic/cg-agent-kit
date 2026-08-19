@@ -59,13 +59,11 @@ There is **no general hardware divider** for a runtime denominator. What's legal
 
 - **By a compile-time constant power of two** → a shift / mask, single cycle.
   `u32 x; x / 4` → `x >> 2`. This is the one always-safe constant form.
-- **By any other constant** (`x / 10`, `x % 3`) → **NOT supported by the open-source
-  compiler.** It is accepted by the front end but the lowering pass fails, and the
-  emitted module is left WITHOUT the division logic — `generate` still prints
-  "Success!", so this fails silently. Treat a non-power-of-two constant exactly like
-  a runtime divisor and use the built-in below. (The commercial Neosyn SDK lowers it
-  to a single-cycle reciprocal "magic-number" multiply, `(x*M) >> s`, the same trick
-  GCC/LLVM emit — that is an SDK-only feature. See https://neosyn.io.)
+- **By any other constant** (`x / 10`, `x % 3`) → a single-cycle reciprocal
+  "magic-number" multiply, `(x*M) >> s` — the same trick GCC/LLVM emit. `x / 10` on a
+  u32 becomes `(x * 64'hcccccccd) >> 35`. Supported by the open-source compiler; this
+  doc previously said it was not, which was true only before the lowering was ported.
+  Verified against the open compiler, not assumed.
 - a **zero or negative** constant divisor is rejected.
 - **By a runtime value** → rejected with a hint. Use the **`std.math.Divide` built-in**
   (sequential shift/subtract, multi-cycle, `stream` handshake; a `use_hard` option maps to
