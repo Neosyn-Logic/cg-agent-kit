@@ -156,6 +156,59 @@ class TestDiagnostics(unittest.TestCase):
         self.assertEqual(cg._diagnostics("all good, nothing to see\n"), [])
 
 
+class TestSourceUsageGuard(unittest.TestCase):
+    """`source` takes C⏚ TEXT. A path, or an expression that would read one,
+    must be REJECTED rather than compiled as if it were source.
+
+    The regression this pins (AccelOne trial, 2026-09-20): passing a path
+    compiled the path string and produced `Main.cg:1 missing 'package' at
+    'fpga'`. A model read that, concluded the compiler wanted a `Main.cg` entry
+    point, and spent its last ten minutes hunting a file that does not exist.
+    The diagnostic must therefore name the RECEIVED VALUE and carry NO file
+    name, or it invites the same inference."""
+
+    def test_path_rejected_and_names_the_value(self):
+        msg = cg._source_usage_error("fpga/src/main/cg/IntSum64.cg")
+        self.assertIsNotNone(msg)
+        self.assertIn("fpga/src/main/cg/IntSum64.cg", msg)
+        self.assertIn("package_dir", msg)
+        self.assertNotIn("Main.cg", msg)
+
+    def test_python_expression_rejected(self):
+        msg = cg._source_usage_error('open("x/y/IntSum64.cg").read()')
+        self.assertIsNotNone(msg)
+        self.assertIn("IntSum64.cg", msg)
+
+    def test_bare_word_without_package_rejected(self):
+        self.assertIsNotNone(cg._source_usage_error("IntSum64"))
+
+    def test_empty_rejected(self):
+        self.assertIsNotNone(cg._source_usage_error("   "))
+
+    def test_real_source_accepted(self):
+        src = ("package com.example;\n"
+               "task Counter {\n"
+               "  out sync u8 o;\n"
+               "  void loop() { o.write(1); }\n"
+               "}\n")
+        self.assertIsNone(cg._source_usage_error(src))
+
+    def test_guard_surfaces_as_a_fileless_diagnostic(self):
+        diags = cg._diagnostics("[cg-kit] source looks like a path: 'a/b.cg'. ...")
+        self.assertEqual(len(diags), 1)
+        self.assertIsNone(diags[0]["file"])
+        self.assertIsNone(diags[0]["line"])
+        self.assertIn("looks like a path", diags[0]["message"])
+
+    def test_check_rejects_a_path_without_inventing_a_file(self):
+        """End to end through check(): no compiler run, no phantom Main.cg."""
+        r = cg.check("fpga/src/main/cg/IntSum64.cg")
+        self.assertFalse(r["ok"])
+        self.assertEqual(len(r["diagnostics"]), 1)
+        self.assertIsNone(r["diagnostics"][0]["file"])
+        self.assertIn("IntSum64.cg", r["diagnostics"][0]["message"])
+
+
 class TestClean(unittest.TestCase):
     """_clean noise-stripping + line cap."""
 

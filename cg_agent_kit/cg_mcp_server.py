@@ -69,6 +69,10 @@ _DIAG = re.compile(r"^\[neosyn\]\s+([^:]*\.cg):(\d+):\s*(.*)$", re.M)
 _XFORM_ERR = re.compile(
     r"^\[neosyn\]\s+(?:Transform|HDL emit) error in (\S+?):\s*(.*)$", re.M)
 # Noise lines to strip from human-facing output.
+# Kit-level usage errors (not compiler output). Deliberately carry NO file name:
+# the whole failure mode below is a wrong argument producing a plausible error
+# about a plausible file, which a reader then reasons from.
+_USAGE_ERR = re.compile(r"^\[cg-kit\]\s+(.*)$", re.M)
 _NOISE = re.compile(r"^\[(CgLanguageServer|CLI)\]|^Running simulation:|License:|"
                     r"^\s*at (java|com)\.|^Caused by:|UnixException|AccessDenied")
 
@@ -134,6 +138,12 @@ def _diagnostics(output: str):
         if msg and key not in seen:
             seen.add(key)
             out.append({"file": None, "line": None, "entity": m.group(1), "message": msg})
+    for m in _USAGE_ERR.finditer(output):
+        msg = m.group(1).strip()
+        key = (None, None, msg)
+        if msg and key not in seen:
+            seen.add(key)
+            out.append({"file": None, "line": None, "message": msg})
     return out
 
 
@@ -144,12 +154,49 @@ def _clean(output: str, limit: int = 120) -> str:
     return "\n".join(lines)
 
 
+def _source_usage_error(source: str) -> str | None:
+    """`source` takes C⏚ TEXT. Catch the argument that is a path, or code that
+    would read one, BEFORE compiling it.
+
+    Why a guard rather than letting the compiler speak: passing a path compiles
+    the path STRING, and the parser reports `Main.cg:1 missing 'package' at
+    'fpga'` -- a plausible error naming a plausible file, because `_entity_name`
+    falls back to "Main" when it finds no entity. Measured 2026-09-20 in the
+    AccelOne trial: a model read exactly that, concluded the compiler wanted a
+    `Main.cg` entry point, spent its last ten minutes hunting a file that does
+    not exist, and filed all three of its "could not find" answers about the
+    phantom. Its real bug went unfixed. A failure that manufactures a false
+    problem is worth rejecting an odd input for.
+
+    Only single-line input is judged: real C⏚ needs a `package` line plus an
+    entity, so a valid one-liner does not exist.
+    """
+    s = (source or "").strip()
+    if not s:
+        return ("source is empty; it takes C⏚ text, not a filename. "
+                "For a multi-file project use package_dir.")
+    if "\n" in s:
+        return None
+    looks_like_path = os.path.exists(s) or s.endswith(".cg") or "/" in s
+    if looks_like_path or "package" not in s:
+        shown = s if len(s) <= 120 else s[:117] + "..."
+        what = "a path" if looks_like_path else "not C⏚ source"
+        return (f"source looks like {what}: {shown!r}. `source` takes C⏚ TEXT, "
+                f"not a filename or an expression -- read the file yourself and "
+                f"pass its contents. For a multi-file project, pass package_dir "
+                f"(the package root) and give source the entry file's text.")
+    return None
+
+
 def _run(subcmd: str, source: str, flags: list | None = None,
          extra_files: dict | None = None, timeout: int = 60):
     """Write `source` (+ any extra_files) into an ISOLATED temp dir — the
     compiler scans sibling .cg files, so it must see only what we give it —
     then run the jar as `<subcmd> <src> <flags...>` (the CLI wants the path
     first). Returns (rc, combined_output, timed_out, src_path)."""
+    usage = _source_usage_error(source)
+    if usage:
+        return 2, f"[cg-kit] {usage}", False, ""
     if not JAR.is_file():
         raise FileNotFoundError(
             f"cg-language-server.jar not found at {JAR}. Build the open-source "
