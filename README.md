@@ -1,5 +1,11 @@
 # C⏚ Agent Kit
 
+> **Renamed.** This was `cg-agent-kit` up to 1.0.0. "cg" is our shorthand for C⏚
+> and meant nothing to anyone searching for an FPGA tool. `pip install cg-agent-kit`
+> still works — it is a shim that installs this package — and
+> `python -m cg_agent_kit.cg_mcp_server` still resolves, so existing MCP host
+> configs keep working. New installs should use `neosyn-fpga-mcp`.
+
 Make any LLM write **C⏚ (Cg)** instead of Verilog — **without retraining the
 model.** The kit has two parts that work together:
 
@@ -98,7 +104,7 @@ Two tools take a backend selector:
 ## Install
 
 ```bash
-pip install cg-agent-kit
+pip install neosyn-fpga-mcp
 ```
 
 Then point it at a built C⏚ compiler jar (download the prebuilt jar from
@@ -113,7 +119,7 @@ Smoke-test the verification core without an MCP client:
 
 ```bash
 python3 - <<'PY'
-from cg_agent_kit import cg_mcp_server as cg
+from neosyn_fpga_mcp import cg_mcp_server as cg
 print(cg.simulate("package d;\ntask T { properties { test: { v:[1,2,3] } }\n"
                   "  out push u8 v; u8 c; void setup(){c=0;}\n"
                   "  void loop(){c=c+1; v.write(c);} }"))
@@ -129,8 +135,8 @@ settings): add a server entry. Use absolute paths.
 {
   "mcpServers": {
     "cg": {
-      "command": "/abs/path/tools/cg-agent-kit/.venv/bin/python",
-      "args": ["/abs/path/tools/cg-agent-kit/cg_mcp_server.py"],
+      "command": "neosyn-fpga-mcp",
+      "args": [],
       "env": {
         "CG_JAR": "/abs/path/releng/lsp-server/target/cg-language-server.jar",
         "NEOSYN_CG_DEV": "1"
@@ -169,7 +175,7 @@ it even without separate instruction.
 ### The loop, end to end
 
 ```python
-from cg_agent_kit import cg_mcp_server as cg
+from neosyn_fpga_mcp import cg_mcp_server as cg
 
 src = '''package com.example.demo;
 task Counter {
@@ -314,7 +320,7 @@ safeguard for the client, and a no-op for the eval.
 ## Files
 
 ```
-cg-agent-kit/
+neosyn-fpga-mcp/
 ├── README.md            this file
 ├── cg_context.md        the "C⏚ for LLMs" knowledge pack (system prompt)
 ├── cg_mcp_server.py     the MCP server (stdlib core + thin mcp wrapper)

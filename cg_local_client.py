@@ -27,7 +27,7 @@ import re
 import sys
 import urllib.request
 
-from cg_agent_kit import cg_mcp_server as cg
+from neosyn_fpga_mcp import cg_mcp_server as cg
 
 _CODE = re.compile(r"```(?:cg|c)?\s*\n(.*?)```", re.S)
 
@@ -65,7 +65,7 @@ MODEL = os.environ.get("CG_LLM_MODEL", "qwen3.6:35b-a3b")
 HERE = os.path.dirname(os.path.abspath(__file__))
 # The docs ship INSIDE the package; HERE is the repo root in a checkout,
 # so resolve through the package rather than beside this file.
-from cg_agent_kit import cg_mcp_server as _cg
+from neosyn_fpga_mcp import cg_mcp_server as _cg
 CONTEXT = (_cg._HERE / "cg_context.md").read_text()
 
 TOOLS = [

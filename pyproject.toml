@@ -3,8 +3,8 @@ requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cg-agent-kit"
-version = "1.0.0"
+name = "neosyn-fpga-mcp"
+version = "1.1.0"
 description = "MCP server for FPGA hardware design in C⏚ — drive the open-source C⏚ Verilog compiler from an AI agent."
 readme = "README.md"
 license = { text = "MIT" }
@@ -25,10 +25,12 @@ Repository = "https://github.com/Neosyn-Logic/cg-agent-kit"
 "Open source" = "https://neosyn.io/open"
 
 [project.scripts]
-cg-mcp-server = "cg_agent_kit.cg_mcp_server:main"
+neosyn-fpga-mcp = "neosyn_fpga_mcp.cg_mcp_server:main"
+# Kept so existing MCP host configs do not break on the rename.
+cg-mcp-server = "neosyn_fpga_mcp.cg_mcp_server:main"
 
 [tool.setuptools]
-packages = ["cg_agent_kit"]
+packages = ["neosyn_fpga_mcp", "cg_agent_kit"]
 
 [tool.setuptools.package-data]
-cg_agent_kit = ["*.md", "*.json", "examples/*.cg", "examples/*.md"]
+neosyn_fpga_mcp = ["*.md", "*.json", "examples/*.cg", "examples/*.md"]

@@ -23,7 +23,7 @@ import pathlib
 import shutil
 import unittest
 
-from cg_agent_kit import cg_mcp_server as cg
+from neosyn_fpga_mcp import cg_mcp_server as cg
 
 # Dependency gates for the integration tests.
 JAR_OK = cg.JAR.is_file()

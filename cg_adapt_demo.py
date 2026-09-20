@@ -24,12 +24,12 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from cg_agent_kit import cg_mcp_server as cg
+from neosyn_fpga_mcp import cg_mcp_server as cg
 from cg_vs_verilog_eval import complete, extract
 
 CG_# The docs ship INSIDE the package; HERE is the repo root in a checkout,
 # so resolve through the package rather than beside this file.
-from cg_agent_kit import cg_mcp_server as _cg
+from neosyn_fpga_mcp import cg_mcp_server as _cg
 CONTEXT = (_cg._HERE / "cg_context.md").read_text()
 BASE_DOT = open(os.path.join(HERE, "examples", "DotProduct.cg")).read()
 
