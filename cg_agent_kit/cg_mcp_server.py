@@ -30,9 +30,13 @@ PROBES. Call cg_capabilities (or capabilities()) for the answer here. Where
 the bytecode simulator exists it is the default and the right tool —
 'iverilog' is a slower Verilog-level cross-check. Where it does not,
 cg_simulate returns `available: False` with a pointer; note that it does NOT
-silently fall back, because the iverilog backend needs a differently shaped
-testbench (a network whose NAME contains "Test") and a quiet switch would
-look like a passing run of something you did not ask for.
+silently fall back, because on every compiler released so far the iverilog
+backend needs a differently shaped testbench (a network whose NAME contains
+"Test") and a quiet switch would look like a passing run of something you did
+not ask for. That naming rule is FIXED in the compiler after 3.2.0 -- a `test`
+property or a `<Design>_test` name is enough there -- but it still applies to
+3.2.0, to every earlier release, and to the current open-source build, so the
+guidance below keeps it.
 
 The core functions (check/simulate/generate/fsm/graph) have no MCP
 dependency, so they can be unit-tested directly:
@@ -451,10 +455,14 @@ def _simulate_iverilog(source: str, extra_files: dict | None, timeout: int) -> d
                 chosen = tb
         if chosen is None:
             return {"ok": False, "simulator": "iverilog",
-                    "error": "no generated testbench (.tb.v): the HDL backend emits one "
-                             "only for a network whose name contains 'Test' (capital T, "
-                             "e.g. `network TestFoo`). Rename the test network, or use "
-                             "simulator='bytecode' (which keys off the `test` property).",
+                    "error": "no generated testbench (.tb.v). On compilers up to 3.2.0 and "
+                             "on the open-source build, the HDL backend emits one only for a "
+                             "network whose name contains 'Test' (capital T, e.g. "
+                             "`network TestFoo`) -- a `test` property is NOT enough, and the "
+                             "documented `<Design>_test` convention does NOT work. Rename the "
+                             "test network, or use simulator='bytecode' (which keys off the "
+                             "`test` property). Fixed in the compiler after 3.2.0: there a "
+                             "`test` property or a `_test` name both work.",
                     "output": _clean(out)}
 
         vvp = work / "sim.vvp"
@@ -1185,8 +1193,9 @@ _SIM_GUIDANCE_BYTECODE = """- Simulation: the fast bytecode simulator IS availab
 _SIM_GUIDANCE_IVERILOG = """- Simulation: the fast bytecode simulator is NOT in this compiler (it ships with
   the commercial Neosyn distribution) — use simulator="iverilog". iverilog only
   emits a testbench when the network NAME contains "Test" (capital T, e.g.
-  `network TestConv`), and the driver must terminate (no infinite loop) or the
-  sim times out.
+  `network TestConv`) -- a `test` property alone is not enough on this build, and
+  neither is the `<Design>_test` convention -- and the driver must terminate (no
+  infinite loop) or the sim times out.
 """
 
 
