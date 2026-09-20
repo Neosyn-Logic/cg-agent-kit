@@ -1,0 +1,209 @@
+package com.neosyn.examples.io;
+
+// Manchester line coding — encoder AND decoder, plus a network that wires them
+// back to back and proves the ROUND TRIP. The code behind 10BASE-T Ethernet,
+// RFID/NFC, IR remotes, DALI lighting, and most "one wire, no clock" links.
+//
+// THE PROBLEM IT SOLVES. Send raw NRZ bits down a wire and two things break.
+// (1) A long run of identical bits has NO transitions, so the receiver's clock
+// recovery has nothing to lock to and drifts until it samples in the wrong bit.
+// (2) The average voltage depends on the data, so the link cannot be
+// AC-coupled — no transformer, no capacitor, no isolation. Manchester fixes both
+// by construction: it sends a TRANSITION in the middle of every bit.
+//
+//     bit 1  ->  line low  then high   (a RISING mid-bit edge)
+//     bit 0  ->  line high then low    (a FALLING mid-bit edge)
+//
+// (That is the IEEE 802.3 convention. G.E. Thomas / "Manchester II" uses the
+// opposite polarity. They are trivially interconvertible and endlessly confused
+// — always say which one you mean. Invert `line` here for the other.)
+// So there is at least one edge per bit whatever the data, and every bit spends
+// exactly half its time high: DC balance is exact, guaranteed, data-independent.
+// The price is BANDWIDTH — two line transitions per data bit, i.e. half the
+// payload rate of NRZ for the same symbol rate. That is why gigabit links use
+// 8b/10b or 64b/66b scramblers instead (see Lfsr): those buy most of the same
+// properties for a few percent of overhead rather than 100%.
+//
+// THE THIRD, UNDER-APPRECIATED PROPERTY: the code is SELF-CHECKING. "High for a
+// whole bit-time" and "low for a whole bit-time" are not legal symbols, so a
+// receiver that sees no mid-bit transition KNOWS something is wrong. That is
+// what `viol` reports here, and it is not an error path bolted on — 10BASE-T
+// uses exactly this deliberately, transmitting an illegal symbol as the
+// end-of-frame delimiter.
+//
+// TIME BASE. Both blocks run at TWO CLOCKS PER BIT ("half-bit time"), with a
+// single `p` phase register: p=0 is the first half, p=1 the second. The encoder
+// therefore expects `din` to be HELD for both cycles of its bit — which is what
+// a real source does — and latches it on p=0. For a real line rate, gate both
+// blocks behind a Pwm `tick` (its one-cycle wrap pulse) at twice the bit rate,
+// and the FSMs below do not change at all.
+//
+// WHAT IS DELIBERATELY LEFT OUT: phase acquisition. These two start in phase
+// because they start together. A real receiver does not know where the bit
+// boundaries are, and must find them — by oversampling the line 4x-16x and
+// locking onto the transitions, or by using a PREAMBLE (Ethernet's alternating
+// 1010... is there precisely so the receiver can lock its half-bit clock before
+// the frame starts). Building that is a separate job; get this pair right first,
+// then wrap the decoder in an oversampling front end (UartRx shows the
+// start-bit-detect flavour of the same problem).
+//
+// TO ADAPT:
+//   * Manchester II / G.E. Thomas polarity — invert `line` in the encoder and
+//     the recovered bit in the decoder.
+//   * DIFFERENTIAL Manchester (used by token ring, and immune to a swapped pair)
+//     — encode by presence/absence of a transition at the START of the bit
+//     instead of by the direction of the mid-bit one.
+//   * a real bit rate — feed both from one Pwm `tick` at 2x the bit rate.
+//   * BIPHASE MARK / FM0 (S/PDIF, AES3) — same family, same skeleton, different
+//     transition rules.
+//   * framing — put a preamble generator in front of the encoder and a
+//     preamble detector (a shift register + compare, see Seq1011) in front of
+//     the decoder.
+//
+// Timing (as in every Cg FSM): publish the CURRENT outputs before advancing the
+// phase. All state is inline-initialized — no setup(), which would add a reset
+// state and offset the whole stream by a cycle.
+
+// ---------------------------------------------------------------- encoder
+// One data bit in per BIT-TIME (held over both cycles), one line half-bit out
+// per cycle.
+task ManchesterEnc {
+    properties {
+        test: {
+            //     each bit is held for its whole 2-cycle bit-time: 1,0,1,1,0,0,1,0 == 0xB2
+            din:  [ 1, 1,  0, 0,  1, 1,  1, 1,  0, 0,  0, 0,  1, 1,  0, 0 ],
+            // bit 1 -> low,high (rising mid-bit).  bit 0 -> high,low (falling mid-bit).
+            line: [ 0, 1,  1, 0,  0, 1,  0, 1,  1, 0,  1, 0,  0, 1,  1, 0 ],
+            // exactly half of every bit-time is high -> the line is DC balanced
+            half: [ 0, 1,  0, 1,  0, 1,  0, 1,  0, 1,  0, 1,  0, 1,  0, 1 ]
+        }
+    }
+
+    sync {
+        in  bool din;    // the data bit; must be HELD for both cycles of its bit-time
+        out bool line;   // one line half-bit per cycle
+        out bool half;   // which half of the bit-time this is (0 = first)
+    }
+
+    bool p = false;      // half-bit phase
+    bool b = false;      // the bit being transmitted, latched at the bit boundary
+
+    void loop() {
+        bool d = din.read();
+
+        bool lv = false;
+        if (!p) {
+            b  = d;      // latch at the START of the bit-time ...
+            lv = !d;     // ... and send the INVERSE first
+        } else {
+            lv = b;      // ... then the bit itself: the mid-bit transition
+        }
+
+        line.write(lv);
+        half.write(p);
+
+        p = !p;
+    }
+}
+
+// ---------------------------------------------------------------- decoder
+// One line half-bit in per cycle; one recovered bit out per bit-time, flagged by
+// a one-cycle `valid`. `dout` HOLDS between valids — qualify it, same rule as
+// UartRx's byte and SpiMaster's `rx`.
+task ManchesterDec {
+    properties {
+        test: {
+            //     |------------------ the encoder's line, 0xB2 -----------------|  |-- 1,1 --|  |-- 0,0 --|  |-- ok --|
+            line:  [ 0, 1,  1, 0,  0, 1,  0, 1,  1, 0,  1, 0,  0, 1,  1, 0,   1, 1,    0, 0,     0, 1,  1, 0 ],
+            // the recovered bit, published one cycle after its second half-bit
+            dout:  [ 0, 0,  1, 1,  0, 0,  1, 1,  1, 1,  0, 0,  0, 0,  1, 1,   0, 0,    1, 1,     0, 0,  1, 1 ],
+            // 8 valids -> 1,0,1,1,0,0,1,0 == 0xB2, the byte that went in
+            valid: [ 0, 0,  1, 0,  1, 0,  1, 0,  1, 0,  1, 0,  1, 0,  1, 0,   1, 0,    0, 0,     0, 0,  1, 0 ],
+            // no mid-bit transition == an ILLEGAL symbol. Detected, and `valid` stays low.
+            viol:  [ 0, 0,  0, 0,  0, 0,  0, 0,  0, 0,  0, 0,  0, 0,  0, 0,   0, 0,    1, 0,     1, 0,  0, 0 ]
+        }
+    }
+
+    sync {
+        in  bool line;    // one line half-bit per cycle
+        out bool dout;    // the recovered bit — VALID ONLY WHEN `valid`
+        out bool valid;   // one cycle per successfully decoded bit
+        out bool viol;    // one cycle per CODING VIOLATION (no mid-bit transition)
+    }
+
+    bool p   = false;     // half-bit phase
+    bool s1  = false;     // the first half-bit sample of the bit in progress
+    bool db  = false;     // last recovered bit (held)
+    bool v   = false;
+    bool bad = false;
+
+    void loop() {
+        bool s = line.read();
+
+        dout.write(db);        // publish the PREVIOUS result before overwriting it
+        valid.write(v);
+        viol.write(bad);
+
+        if (!p) {
+            s1  = s;           // first half: just remember it
+            v   = false;
+            bad = false;
+        } else {
+            db  = s;           // second half IS the data bit (802.3 polarity)
+            v   = (s1 != s);   // a mid-bit transition happened -> a legal symbol
+            bad = (s1 == s);   // no transition -> illegal: high or low for a whole bit
+        }
+
+        p = !p;
+    }
+}
+
+// -------------------------------------------------------------- round trip
+// The claim the two blocks make together: bits in == bits out. Drive 0xB2 into
+// the encoder, feed its line straight into the decoder, and reassemble the byte
+// from whatever comes out on (dout, valid). Any polarity slip, phase slip or
+// off-by-one in either block changes the recovered byte and the assert fires.
+network Manchester_test {
+    properties { test: { terminate: "monitor.finished" } }
+
+    enc = new ManchesterEnc();
+    dec = new ManchesterDec();
+
+    driver = new task {
+        sync { out bool din; }
+        void loop() {                       // 0xB2, MSB first, each bit held for
+            din.write(true);  din.write(true);     // its whole 2-cycle bit-time
+            din.write(false); din.write(false);
+            din.write(true);  din.write(true);
+            din.write(true);  din.write(true);
+            din.write(false); din.write(false);
+            din.write(false); din.write(false);
+            din.write(true);  din.write(true);
+            din.write(false); din.write(false);
+        }
+    };
+
+    monitor = new task {
+        sync { in bool dout; in bool valid; }
+        u8   got      = 0;
+        u4   n        = 0;
+        bool finished = false;
+        void loop() {
+            bool d = dout.read();
+            bool v = valid.read();
+            if (v) {
+                if (d) { got = (u8) ((got << 1) | 1); } else { got = (u8) (got << 1); }
+                n = (u4) (n + 1);
+                if (n == 8) {
+                    print("Manchester round trip = ", got, " (expect 0xB2)\n");
+                    assert(got == 0xB2);
+                    finished = true;
+                }
+            }
+        }
+    };
+
+    enc.reads(driver.din);
+    dec.reads(enc.line);
+    monitor.reads(dec.dout, dec.valid);
+}

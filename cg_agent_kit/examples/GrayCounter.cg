@@ -1,0 +1,106 @@
+package com.neosyn.examples.logic;
+
+// Gray-code counter, with the binary <-> Gray conversion both ways AND a hardware
+// check of the property that is the whole reason Gray code exists.
+//
+// THE PROPERTY: consecutive Gray codes differ in EXACTLY ONE BIT. Binary does
+// not — 0111 -> 1000 changes all four. That matters whenever a multi-bit value
+// is sampled by something that is not synchronous to the counter, because the
+// sampler can catch the word mid-transition and see a mixture of the old and new
+// bits. With binary, 7 -> 8 sampled at the wrong instant can read as 15 or 0 —
+// a value the counter never held. With Gray only one bit is ever in flight, so
+// the worst case is reading the old value or the new one. Both are legal.
+//
+// THAT IS THE CDC FIFO POINTER RULE, and it is not theoretical: this project
+// shipped a VHDL `AsynchronousFIFO` that crossed BINARY pointers into the far
+// domain and could compute a bogus occupancy for exactly this reason. The fix
+// was Gray-coding the pointers (plus a 2-flop synchroniser on the far side).
+// If you are building a dual-clock FIFO, prefer `std.fifo.AsynchronousFIFO` —
+// it already does this — and use this block when you need the pointer yourself,
+// or for a shaft/position encoder, or a low-power bus where one toggling bit per
+// step is the point.
+//
+// THE CONVERSIONS, both one line:
+//     binary -> Gray:  g = b ^ (b >> 1)                     (one XOR per bit)
+//     Gray -> binary:  b = g ^ (g>>1) ^ (g>>2) ^ (g>>3)     (an XOR PREFIX)
+// The decode is a prefix-XOR, so it costs W-1 levels for a W-bit word — a
+// combinational chain that gets slow when W is large. That is why real designs
+// keep the counter in BINARY and derive Gray for the crossing (as here), rather
+// than counting in Gray and decoding on every use.
+//
+// `onestep` is the property CHECKED IN HARDWARE: it compares this cycle's Gray
+// word with last cycle's and asserts the difference is a single bit, using the
+// standard power-of-two test `d != 0 && (d & (d-1)) == 0`. The test vectors pin
+// it high on every cycle that follows an increment — including the 15 -> 0 wrap,
+// which is the case a naive Gray implementation gets wrong. `onestep` is low
+// while `en` is low, because no step happened; it is a check on INCREMENTS, not
+// a permanent property of the wire.
+//
+// TO ADAPT:
+//   * other widths — everything scales; the decode needs one more XOR term per
+//     bit (u8 wants >>1 >>2 >>3 >>4 >>5 >>6 >>7, or a two-stage prefix tree).
+//     A Gray counter is only single-bit-change if the count is a power of two
+//     long: a mod-10 Gray counter needs a hand-built sequence.
+//   * a CDC pointer — take `gray` into the other domain through
+//     `std.lib.SynchronizerFF` (one instance per bit), and decode there.
+//   * an absolute POSITION ENCODER — the disc reads out Gray directly; you only
+//     need the decode half of this block.
+//   * one-hot / thermometer coding — different property (one bit set / a run of
+//     set bits) but the same "publish a code, decode it back" skeleton.
+//
+// Timing (as in every Cg FSM): a port reflects the register at the START of the
+// cycle, so publish the CURRENT count and its Gray code BEFORE incrementing. All
+// registers are inline-initialized (no setup(), which would add a reset state
+// that offsets the whole stream).
+task GrayCounter {
+    properties {
+        test: {
+            //           |--- counting ---| HOLD |------------- counting on to the 15 -> 0 wrap and past it -------------|
+            en:      [ 1,  1,  1,  1,  1,  1,  0,  0,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1 ],
+            bin:     [ 0,  1,  2,  3,  4,  5,  6,  6,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15,  0,  1,  2 ],
+            // 0,1,3,2,6,7,5,4,12,13,15,14,10,11,9,8 — the reflected binary code
+            gray:    [ 0,  1,  3,  2,  6,  7,  5,  5,  5,  4, 12, 13, 15, 14, 10, 11,  9,  8,  0,  1,  3 ],
+            // the round trip: decoded MUST equal bin on every single cycle
+            decoded: [ 0,  1,  2,  3,  4,  5,  6,  6,  6,  7,  8,  9, 10, 11, 12, 13, 14, 15,  0,  1,  2 ],
+            // the defining property, checked in hardware: exactly ONE bit moved.
+            // Low in cycle 0 (nothing to compare with) and while `en` is low (no step).
+            // Note vector 18: the 15 -> 0 WRAP is a one-bit change too (8 -> 0).
+            onestep: [ 0,  1,  1,  1,  1,  1,  1,  0,  0,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1,  1 ]
+        }
+    }
+
+    sync {
+        in  bool en;        // advance the counter this cycle
+        out u4   bin;       // the counter, in ordinary binary
+        out u4   gray;      // the same value, Gray-coded — the one to cross domains
+        out u4   decoded;   // `gray` converted back; must always equal `bin`
+        out bool onestep;   // true iff exactly one bit of `gray` changed since last cycle
+    }
+
+    u4   b       = 0;       // the counter itself is BINARY; Gray is derived
+    u4   gprev   = 0;       // last cycle's Gray word, for the property check
+    bool stepped = false;   // did the counter actually advance last cycle?
+
+    void loop() {
+        bool e = en.read();
+
+        u4 g = (u4) (b ^ (u4) (b >> 1));                    // binary -> Gray
+
+        u4 d = (u4) (g ^ (u4) (g >> 1)                      // Gray -> binary:
+                       ^ (u4) (g >> 2)                      // the XOR prefix
+                       ^ (u4) (g >> 3));
+
+        // exactly-one-bit-changed == "the difference is a power of two"
+        u4 diff = (u4) (g ^ gprev);
+        bool one = stepped && diff != 0 && (u4) (diff & (u4) (diff - 1)) == 0;
+
+        bin.write(b);                                       // publish the CURRENT
+        gray.write(g);                                      // state, before the
+        decoded.write(d);                                   // transition
+        onestep.write(one);
+
+        gprev   = g;
+        stepped = e;
+        if (e) { b = (u4) (b + 1); }                        // wraps 15 -> 0
+    }
+}

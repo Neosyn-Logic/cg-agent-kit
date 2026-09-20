@@ -1,0 +1,101 @@
+package com.neosyn.examples.dsp;
+
+// Sliding-window moving average over the last N samples — the cheapest useful
+// low-pass filter, and the standard way to smooth an ADC reading, a sensor, a
+// packet-rate estimate or an error signal before a control loop sees it.
+//
+// THE TRICK THAT MAKES IT CHEAP — a RUNNING SUM. The definition of the average
+// is "add up the last N samples and divide", which sounds like N adders and N
+// registers of arithmetic every cycle. It is not: the window only changes by one
+// sample per cycle, so
+//     acc = acc - (the sample leaving the window) + (the new sample)
+// is ONE add and ONE subtract, no matter how large N is. The window memory is
+// still N deep (you have to know which sample is leaving), but it is a plain
+// circular buffer with a wrapping write pointer — an array indexed by a runtime
+// value, exactly as in RegisterFile. Cost is O(1) arithmetic + O(N) storage.
+// This block is Accumulator with a subtraction added; that is the whole delta.
+//
+// READ `win[wp]` BEFORE WRITING IT. `wp` points at the OLDEST sample, which is
+// also the slot the newest one goes into. Do the read first (line order matters
+// here) or you subtract the sample you just wrote and the sum drifts forever.
+//
+// `full` IS NOT DECORATION. The buffer starts zero-filled, so for the first N-1
+// cycles the average is being diluted by zeros that were never real samples —
+// the output ramps up from 1, 3, 7, 12 while the input is already 10, 20, 30, 40.
+// Any consumer must ignore the output until `full` goes high (same data/valid
+// discipline as UartRx's byte). The alternative, if you cannot wait N cycles, is
+// to preload every slot with the first sample.
+//
+// DIVIDING BY N COSTS NOTHING HERE, and does not need to be a power of two.
+// N = 8 folds to a shift, but the compiler also compiles `acc / 10` and
+// `acc / 3` inline as a reciprocal multiply — one multiplier, single cycle, no
+// divider (see the notes in RECIPES.md). So pick the window your signal wants,
+// not the one that is a power of two. Only a RUNTIME divisor needs
+// `std.math.Divide`.
+//
+// THE WIDTH RULE: `acc` must hold N * max(x), or it wraps and the filter goes
+// mad. u8 samples with N = 8 needs 255*8 = 2040, so u16. Widen `acc` and `sum`
+// together with N.
+//
+// TO ADAPT:
+//   * a different window — change N, the array size and the width of `wp`
+//     (`u3` addresses 8 slots, `u4` addresses 16). Keep `acc` wide enough.
+//   * SIGNED samples — make x/win/acc signed; nothing else changes.
+//   * a BOXCAR FIR — this IS an N-tap FIR with all coefficients 1/N. For shaped
+//     coefficients use Fir instead; a moving average has a poor stopband
+//     (sinc-shaped) and is chosen for its price, not its response.
+//   * an EXPONENTIAL moving average (IIR) when you do not want the N-deep memory
+//     at all — `acc = acc - (acc >> k) + x`, one register, no buffer, no `full`
+//     warm-up. See Accumulator's "integrator with a leak".
+//   * a moving SUM / a windowed max — same skeleton; drop the divide, or replace
+//     the accumulator with a comparison tree.
+//   * a big window (N = 1024) — swap the array for `std.mem.SinglePortRAM` so it
+//     maps to a block RAM instead of registers.
+//
+// Timing: `sum`/`avg` are published AFTER the update, so they include the sample
+// read this cycle (the Accumulator convention — swap the lines for a registered,
+// one-cycle-late output). All state is inline-initialized (no setup(), which
+// would add a reset state that offsets the whole stream).
+task MovingAverage {
+    properties {
+        test: {
+            //     |------- warm-up: the window still holds zeros -------|              SPIKE          |----- the spike is still inside the window -----| it leaves |-- decaying --|
+            x:    [  10,  20,  30,  40,  50,  60,  70,  80,  80,  80,  80,  200,  80,  80,  80,  80,  80,  80,  80,  80,   0,   0,   0 ],
+            sum:  [  10,  30,  60, 100, 150, 210, 280, 360, 430, 490, 540,  700, 730, 750, 760, 760, 760, 760, 760, 640, 560, 480, 400 ],
+            // avg ramps up from nothing while `full` is low — that output is NOT the average yet
+            avg:  [   1,   3,   7,  12,  18,  26,  35,  45,  53,  61,  67,   87,  91,  93,  95,  95,  95,  95,  95,  80,  70,  60,  50 ],
+            // one lone 200 moves the average by 20, not by 120 — that is the smoothing.
+            // Vector 19 is the moment it slides OUT of the window again: 95 -> 80.
+            full: [   0,   0,   0,   0,   0,   0,   0,   1,   1,   1,   1,    1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1 ]
+        }
+    }
+
+    const int N = 8;        // window length, in samples. Need NOT be a power of two.
+
+    sync {
+        in  u8   x;         // one sample per cycle
+        out u16  sum;       // the running sum over the window (wider than N * max(x))
+        out u8   avg;       // sum / N — the filtered output
+        out bool full;      // low until N samples have been seen; ignore `avg` until then
+    }
+
+    u8  win[8];             // the circular window buffer (size N)
+    u3  wp   = 0;           // write pointer == index of the OLDEST sample; wraps mod 8
+    u16 acc  = 0;           // the running sum
+    u4  warm = 0;           // samples seen so far, saturating at N
+
+    void loop() {
+        u8 s = x.read();
+
+        u8 gone = win[wp];              // READ the oldest sample BEFORE overwriting it
+        acc = (u16) (acc - gone + s);   // one subtract + one add, independent of N
+        win[wp] = s;
+        wp = (u3) (wp + 1);             // u3 wraps mod 8 for free
+
+        if (warm < N) { warm = (u4) (warm + 1); }
+
+        sum.write(acc);                 // published AFTER the update: includes `s`
+        avg.write((u8) (acc / N));      // constant divisor -> shift here, reciprocal
+        full.write(warm == N);          // multiply for a non-power-of-two N
+    }
+}

@@ -1,0 +1,74 @@
+package com.neosyn.examples.logic;
+
+// Priority encoder — turn a bit VECTOR into the INDEX of the first set bit, plus
+// a `valid` flag. The one piece of glue every arbiter, interrupt controller,
+// free-list allocator, normaliser and cache-way selector is built out of.
+//
+// This is pure combinational logic: no state, no clock behaviour, one answer per
+// cycle. The whole block is the if/else-if chain below, and the ORDER of that
+// chain IS the priority. Bit 0 wins here (LSB-first, "lowest requester first"),
+// which is the convention for interrupt lines and free lists.
+//
+// WHY THE `valid` FLAG IS NOT OPTIONAL, and the mistake to avoid: index 0 is a
+// perfectly good answer AND the natural "nothing set" default, so `idx` alone
+// cannot distinguish "requester 0 is asking" from "nobody is asking". Every
+// consumer must qualify `idx` with `valid` — the same data/valid rule as
+// UartRx's byte or SpiMaster's `rx`. Getting this wrong grants a bus to
+// requester 0 forever when the bus is idle.
+//
+// TO ADAPT:
+//   * MSB-first (highest bit wins) — reverse the chain: test req[7] first. That
+//     is the "find the highest set bit" / floor(log2) form used by float
+//     normalisers and by the classic priority-interrupt controller.
+//   * a LEADING-ZERO COUNT — MSB-first, and output `7 - idx` (a normaliser wants
+//     the shift distance, not the bit position).
+//   * wider inputs — extend the chain one `else if` per bit and widen `idx`
+//     (u16 -> u4, u32 -> u5). At 32+ bits the flat chain gets deep: split the
+//     word into 4-bit groups, encode each group, encode the group-valid vector
+//     with a second copy of this block, and concatenate the two indices. That
+//     two-level tree is how every real wide encoder is built.
+//   * ONE-HOT output instead of an index — see RoundRobinArbiter, which needs
+//     both (an index to remember and a one-hot vector to drive the grants).
+//   * ROTATING priority instead of fixed — that is exactly RoundRobinArbiter:
+//     rotate the request vector, run this encoder, rotate the index back.
+//
+// No `properties { type: "combinational" }` is needed — the compiler sees there
+// is no state and no fence, and emits a single combinational block.
+task PriorityEncoder {
+    properties {
+        test: {
+            //         none  one bit per position, then several bits at once (LOWEST must win)
+            req:   [ 0x00, 0x01, 0x02, 0x03, 0x04, 0x06, 0x08, 0x0C, 0x10, 0x20, 0x40, 0x80, 0xFF, 0xF0, 0xA0, 0x00 ],
+            // 0x03 -> 0 (not 1), 0x06 -> 1, 0xFF -> 0, 0xF0 -> 4, 0xA0 -> 5: priority, not popcount
+            idx:   [    0,    0,    1,    0,    2,    1,    3,    2,    4,    5,    6,    7,    0,    4,    5,    0 ],
+            // idx 0 is ambiguous on its own — `valid` is what separates "bit 0" from "nothing"
+            valid: [    0,    1,    1,    1,    1,    1,    1,    1,    1,    1,    1,    1,    1,    1,    1,    0 ]
+        }
+    }
+
+    sync {
+        in  u8   req;     // request / bit vector
+        out u3   idx;     // index of the LOWEST set bit (0..7); meaningless when !valid
+        out bool valid;   // true iff req != 0
+    }
+
+    void loop() {
+        u8 r = req.read();
+
+        u3   i = 0;
+        bool v = true;
+
+        if      (r[0]) { i = 0; }        // the chain order IS the priority
+        else if (r[1]) { i = 1; }
+        else if (r[2]) { i = 2; }
+        else if (r[3]) { i = 3; }
+        else if (r[4]) { i = 4; }
+        else if (r[5]) { i = 5; }
+        else if (r[6]) { i = 6; }
+        else if (r[7]) { i = 7; }
+        else           { i = 0; v = false; }   // nothing requested
+
+        idx.write(i);
+        valid.write(v);
+    }
+}

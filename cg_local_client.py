@@ -37,12 +37,48 @@ def extract_code(text: str):
     blocks = _CODE.findall(text or "")
     return blocks[-1].strip() if blocks else None
 
-BASE = os.environ.get("CG_LLM_URL", "http://localhost:11434/v1").rstrip("/")
+def resolve_endpoint(style="openai"):
+    """Resolve the model endpoint from EITHER env var, in EITHER notation.
+
+    The kit grew two variables pointing at the same server in different dialects
+    -- CG_LLM_URL (OpenAI-style `/v1`) here, CG_OLLAMA_URL (native `/api/chat`)
+    in the eval and adapt harnesses -- so setting "the" URL configured half the
+    kit and silently left the rest on localhost defaults. That cost a session
+    real time on 2026-08-20. Accept both, convert between them, and let one
+    export configure everything.
+
+    `style` is the dialect the CALLER speaks: 'openai' wants a base ending /v1,
+    'native' wants a full /api/chat URL."""
+    raw = (os.environ.get("CG_LLM_URL") or os.environ.get("CG_OLLAMA_URL")
+           or "http://localhost:11434")
+    root = raw.rstrip("/")
+    for suffix in ("/api/chat", "/v1/chat/completions", "/v1"):
+        if root.endswith(suffix):
+            root = root[: -len(suffix)]
+            break
+    root = root.rstrip("/")
+    return root + ("/v1" if style == "openai" else "/api/chat")
+
+
+BASE = resolve_endpoint("openai")
 MODEL = os.environ.get("CG_LLM_MODEL", "qwen3.6:35b-a3b")
 HERE = os.path.dirname(os.path.abspath(__file__))
-CONTEXT = open(os.path.join(HERE, "cg_context.md")).read()
+# The docs ship INSIDE the package; HERE is the repo root in a checkout,
+# so resolve through the package rather than beside this file.
+from cg_agent_kit import cg_mcp_server as _cg
+CONTEXT = (_cg._HERE / "cg_context.md").read_text()
 
 TOOLS = [
+    {"type": "function", "function": {
+        "name": "cg_lint",
+        "description": "Static checks for C⏚ that COMPILES but is still wrong -- above "
+                       "all a `test:` fixture that drives inputs yet compares no output, "
+                       "which passes even against a dead design. Free and instant (no "
+                       "compiler); run it on every draft BEFORE cg_check. Returns "
+                       "{ok, findings:[{rule,line,severity,message,fix}]}.",
+        "parameters": {"type": "object",
+                       "properties": {"source": {"type": "string", "description": "the full .cg source"}},
+                       "required": ["source"]}}},
     {"type": "function", "function": {
         "name": "cg_check",
         "description": "Parse, scope and type-check C⏚ source without running it. "
@@ -74,10 +110,57 @@ def _gen_names_only(args):
 
 
 DISPATCH = {
+    "cg_lint": lambda a: cg.lint(a["source"]),
     "cg_check": lambda a: cg.check(a["source"]),
     "cg_simulate": lambda a: cg.simulate(a["source"]),
     "cg_generate_verilog": _gen_names_only,
 }
+
+
+def _roster():
+    """This client's OWN roster, read off the tool schemas it actually sends.
+    It exposes a deliberate 4-tool subset of the MCP server, so pushing the
+    server's 13 would name tools this loop cannot dispatch."""
+    return [{"name": t["function"]["name"],
+             "summary": t["function"]["description"].split(".")[0].strip()}
+            for t in TOOLS if t["function"]["name"] in DISPATCH]
+
+
+def dispatch(name, args):
+    """Run one tool call. A name that is not in DISPATCH gets the ROSTER back,
+    not `unknown tool X`: a small model that has invented a name loops on it
+    otherwise, and the one thing it needs is the list of real ones."""
+    fn = DISPATCH.get(name)
+    if fn is None:
+        return cg.unknown_tool(name, known=_roster())
+    return fn(args)
+
+
+def _tool_content(result, budget=8000):
+    """Serialise a tool result for the model without corrupting it.
+
+    The old `json.dumps(result)[:4000]` truncated the SERIALISED string, so any
+    result over the budget reached the model as invalid JSON -- and results grew
+    when we started pushing lint findings and a seed example. Trim the big,
+    optional payloads FIRST (output, then the pushed source), keeping the small
+    actionable ones (diagnostics, hint, warning) intact, and only then serialise."""
+    r = dict(result)
+    for field in ("output", ):
+        if len(json.dumps(r)) <= budget:
+            break
+        if isinstance(r.get(field), str) and len(r[field]) > 600:
+            r[field] = r[field][:600] + " …[truncated]"
+    if len(json.dumps(r)) > budget and isinstance(r.get("suggestion"), dict):
+        sug = dict(r["suggestion"])
+        # A truncated example is a BROKEN example -- drop it whole rather than
+        # hand the model code that cannot compile.
+        sug.pop("source", None)
+        sug["source_omitted"] = "too large for this turn; call cg_example"
+        r["suggestion"] = sug
+    out = json.dumps(r)
+    return out if len(out) <= budget else json.dumps(
+        {"ok": r.get("ok"), "diagnostics": (r.get("diagnostics") or [])[:3],
+         "note": "result truncated"})
 
 
 def chat(messages, timeout=900):
@@ -89,9 +172,46 @@ def chat(messages, timeout=900):
         return json.load(resp)["choices"][0]["message"]
 
 
+# see cg_mcp_server.example(): unrelated queries still score 4-5 on incidental tag
+# overlap, so the bar sits well above that. Tunable so an experiment can switch
+# seeding OFF (set it very high) without editing code -- seeding and pushed
+# findings are separate effects and a measurement must be able to isolate them.
+SEED_MIN_SCORE = int(os.environ.get("CG_SEED_MIN_SCORE", "10"))
+
+
+def _seed_for(task):
+    """A VERIFIED base for this task, or None if nothing matches confidently.
+
+    The 2026-08-20 probe showed models that receive a verified base first write
+    legal C(g), while the same models from scratch loop on one error. This client
+    already seeds cg_context.md, so the LANGUAGE DOCS are not the difference --
+    concrete working code is.
+
+    Gated on score because a WRONG seed is worse than none: it is code the model
+    will copy. On this corpus an unrelated query still scores 4 on incidental tag
+    overlap, so the bar sits well above that."""
+    try:
+        hit = cg.example(task, k=1)
+    except Exception:
+        return None
+    if not hit.get("ok") or hit.get("score", 0) < SEED_MIN_SCORE:
+        return None
+    if not hit.get("source"):
+        return None
+    return (f"Before you start: here is a VERIFIED, simulated C⏚ program from the "
+            f"library ({hit['name']}) that is close to this task. Adapt it rather "
+            f"than writing from scratch — keep its structure, ports and `test:` "
+            f"block shape, and change only what the task requires.\n\n"
+            f"```cg\n{hit['source']}```")
+
+
 def run(task, max_steps=10):
-    messages = [{"role": "system", "content": CONTEXT},
-                {"role": "user", "content": task}]
+    messages = [{"role": "system", "content": CONTEXT}]
+    seed = _seed_for(task)
+    if seed:
+        messages.append({"role": "system", "content": seed})
+        print(f"  [seeded with a verified base]")
+    messages.append({"role": "user", "content": task})
     last_sim_ok = False
     tool_calls_made = 0
     for step in range(1, max_steps + 1):
@@ -134,7 +254,7 @@ def run(task, max_steps=10):
             except (json.JSONDecodeError, TypeError):
                 args = {"source": tc["function"].get("arguments", "")}
             tool_calls_made += 1
-            result = DISPATCH.get(name, lambda a: {"error": f"unknown tool {name}"})(args)
+            result = dispatch(name, args)
             ok = result.get("ok")
             if name == "cg_simulate":
                 last_sim_ok = bool(ok)
@@ -146,7 +266,7 @@ def run(task, max_steps=10):
                 extra = " | " + " ".join(outs[:4])
             print(f"  step {step}: {name} -> ok={ok}{extra}")
             messages.append({"role": "tool", "tool_call_id": tc.get("id", name),
-                             "content": json.dumps(result)[:4000]})
+                             "content": _tool_content(result)})
     print("\n── hit max_steps without a final answer ──")
     return {"sim_ok": last_sim_ok, "tool_calls": tool_calls_made, "steps": max_steps}
 

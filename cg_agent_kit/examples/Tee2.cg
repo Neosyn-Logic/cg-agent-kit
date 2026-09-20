@@ -1,9 +1,17 @@
 package com.example;
 
-// Tee2 — a 1->2 push replicator. In C⏚ a single push output wired to TWO
-// consumers DEADLOCKS the simulator (runs to the cycle cap, empty output, no
-// diagnostic). The fix is an explicit replicator task: read one token, write it
-// to both output ports. Use one Tee per fan-out point in a dataflow network.
+// Tee2 — an explicit 1->2 push replicator: read one token, write it to both
+// output ports.
+//
+// YOU USUALLY DO NOT NEED THIS. A bare push output wired to two consumers is a
+// correct broadcast — both consumers receive EVERY token, and the producer is
+// held to the slower consumer's rate. (This file used to claim a bare fan-out
+// deadlocks the simulator; that was re-tested in four shapes on both backends
+// and is FALSE. Do not insert a Tee to "fix" a fan-out.)
+//
+// Reach for an explicit Tee when the two branches must diverge — different
+// rates, a transformation on one side, or replication you want to see as real
+// hardware in the netlist. It costs 33 cells that plain wiring does not.
 // Verified: sim ok, yosys REAL, 33 cells, 0 latches.
 task Tee2 {
   in push int<32> a;

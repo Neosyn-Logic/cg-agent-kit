@@ -57,14 +57,12 @@ and uses the value conditionally, or carries a per-group scalar as a `const`/par
 
 There is **no general hardware divider** for a runtime denominator. What's legal:
 
-- **By a compile-time constant power of two** → a shift / mask, single cycle.
-  `u32 x; x / 4` → `x >> 2`. This is the one always-safe constant form.
-- **By any other constant** (`x / 10`, `x % 3`) → a single-cycle reciprocal
-  "magic-number" multiply, `(x*M) >> s` — the same trick GCC/LLVM emit. `x / 10` on a
-  u32 becomes `(x * 64'hcccccccd) >> 35`. Supported by the open-source compiler; this
-  doc previously said it was not, which was true only before the lowering was ported.
-  Verified against the open compiler, not assumed.
-- a **zero or negative** constant divisor is rejected.
+- **By a compile-time constant** — compiles directly, single cycle:
+  - a **power of two** → a shift / mask;
+  - **any other positive constant** → a *reciprocal (magic-number) multiply* `(x*M) >> s`
+    (the same trick GCC/LLVM emit). Correct for both signednesses: floor for unsigned,
+    truncate-toward-zero for signed. E.g. `u32 x; x / 10` → `(x * 0xCCCCCCCD) >> 35`.
+  - a **zero or negative** constant divisor is rejected.
 - **By a runtime value** → rejected with a hint. Use the **`std.math.Divide` built-in**
   (sequential shift/subtract, multi-cycle, `stream` handshake; a `use_hard` option maps to
   the target's native `/`, and a power-of-two divisor takes a fast path):
@@ -74,9 +72,7 @@ div = new std.math.Divide();     // q = a / b for runtime a, b
 div.reads(num.a, num.b);
 ```
 
-`%` by a power-of-two constant is lowered as `x - (x/n)*n` reusing the quotient (correct
-sign both ways) — i.e. a mask. `%` by any other constant has the same open-source limit as
-`/` above: use the `std.math.Divide` built-in.
+`%` by a constant is lowered as `x - (x/n)*n` reusing the quotient (correct sign both ways).
 
 ## Shift `<<` `>>`
 
@@ -87,8 +83,8 @@ sign both ways) — i.e. a mask. `%` by any other constant has the same open-sou
 
 ## What's free vs. what's a paid IP core
 
-- **Free (built-in):** integer `std.math.Divide` and `std.math.Multiply`, power-of-two
-  constant `/` and `%`, constant `<<`, `>>`, and `*`.
+- **Free (built-in):** integer `std.math.Divide` and `std.math.Multiply`, constant `/`,
+  `%`, `<<`, `>>`, and `*`.
 - **Paid (Divider IP core):** **Q16.16 fixed-point** division and the runtime variable-shift
   block — the fixed-point/precision layer on top of the free integer divide.
 

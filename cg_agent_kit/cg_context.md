@@ -5,14 +5,33 @@ description language. C⏚ compiles to **synthesizable Verilog/VHDL** and to
 **JVM bytecode for a fast cycle-accurate simulator**. It is *not* Verilog and
 *not* C. Do not emit Verilog. Write C⏚ and verify it with the compiler tools.
 
-You have compiler tools (`cg_check`, `cg_simulate`, `cg_generate_verilog`,
-`cg_synth`, `cg_example`, `cg_suggest_for_error`, `cg_fsm`, `cg_graph`,
-`cg_docs`). `cg_docs("riscv")` returns a worked CPU reference — the loadable
+You have compiler tools (`cg_lint`, `cg_check`, `cg_simulate`,
+`cg_generate_verilog`, `cg_synth`, `cg_scaffold`, `cg_example`,
+`cg_suggest_for_error`, `cg_report`, `cg_fsm`, `cg_graph`, `cg_docs`,
+`cg_capabilities`). Those are the only tool names there are — a call to
+anything else (`cg_compile`, `cg_run`, …) comes back with this list and the
+closest real name, so you never have to guess twice. **Do not assume which
+simulator you have.** The fast bytecode simulator ships with the commercial Neosyn
+distribution and is absent from the open-source compiler; `cg_capabilities`
+probes this host and tells you which backend to use. Where it exists it is the
+default and the right choice — `simulator="iverilog"` is a slower Verilog-level
+cross-check, not the everyday tool. `cg_docs("riscv")` returns a worked CPU reference — the loadable
 single-cycle RV32I core plus reusable patterns for CPU-shaped hardware (barrel
 shifter for runtime shifts, `u(N+1)` widening for unsigned compares, sub-word
 load/store, count-prefixed boot-stream program loading, lossless-capture
 testbenches); read it before building a processor, decoder, datapath, or stack
 machine.
+**Do not start from a blank file.** Call `cg_scaffold(kind=...)` first: it
+returns a complete skeleton that ALREADY COMPILES and whose self-test ALREADY
+PASSES, with the datapath left as `>>> FILL IN` markers (their line numbers come
+back in `holes`). You then change one thing — the datapath — instead of
+inferring the file skeleton, the port syntax and the test-harness shape at the
+same time, which is where drafts actually fail. Because it starts green, any red
+after your edit IS your edit. `kind="task"` is the default and the strongest: its
+`test:` block value-checks every output cycle by cycle. Use `"fsm"` for a control
+machine, `"stream"` for a push-handshake dataflow stage, `"network"` for a
+multi-stage pipeline, `"generic"` for a parameterized entity.
+
 **Always** `cg_check` then `cg_simulate` a draft and fix every diagnostic before
 presenting code. The compiler is ground truth; your training data has almost no
 C⏚, so verify, don't guess. For a hard fixed-point kernel, call `cg_example`
@@ -32,6 +51,20 @@ asserting test network) is the correctness check; pass it FIRST, then use
 ---
 
 ## The mental model
+
+**File-scope declarations.** On a recent Neosyn compiler you may write `const`,
+`typedef`, `struct` and `enum` directly after `package`/imports, with no enclosing
+container; they are then in scope UNQUALIFIED for the whole file. They must precede the
+first `task`/`network`/`bundle`. (The open-source compiler does not accept this — there,
+put them in a `bundle` and reference them as `BundleName.member`. `cg_capabilities` tells
+you which compiler you have.) Enum LITERALS still need qualifying either way: `Mode.RUN`.
+
+```
+package com.example;
+const int<32> FIX_ONE = 1 << 16;
+const fx_t fxmul(fx_t x, fx_t y) { return (fx_t) ((((int<64>) x) * ((int<64>) y)) >> 16); }
+task Gain { ... y.write(fxmul(x.read(), FIX_ONE)); }
+```
 
 C⏚ has three top-level constructs:
 
@@ -66,11 +99,12 @@ package com.example.demo;
   accumulating into a fixed-width variable needs a cast every step:
   `sum = (int<32>) (sum + x);`. Forgetting this ("cannot convert from i33 to
   i32") is the single most common validation error.
-- `*` is fine (single-cycle, maps to a DSP/multiplier). **`/` and `%` by a
-  constant POWER OF TWO** become a shift/mask and are always safe (`x / 4` →
-  `x >> 2`). **A non-power-of-two CONSTANT divisor** (`x / 10`) is
-  also fine: it lowers to a single-cycle reciprocal multiply, `(x*M) >> s`. Only a
-  **RUNTIME divisor has no inline datapath** — for that use the multi-cycle
+- `*` is fine (single-cycle, maps to a DSP/multiplier). **`/` and `%` by any
+  compile-time CONSTANT are also fine** — a power of two becomes a shift/mask,
+  any other constant a reciprocal (magic-number) multiply, both single-cycle and
+  exact (floor for unsigned, truncate-toward-zero for signed). So `x / 10`,
+  `x % 3`, `x / 4` all just work. Only a **VARIABLE (runtime) divisor** has no
+  inline datapath (division is multi-cycle in hardware): use the multi-cycle
   `std.math.Divide` built-in, or seed a source-included divider with
   `cg_example("divide")` (`Recip` / `Divide` / `SeqDiv`). The divisor must be
   positive.
@@ -187,9 +221,46 @@ task Counter {
     u8 count;                 // state — persists across cycles
 
     void setup() { count = 0; }            // once, at reset
-    void loop()  { count = count + 1; value.write(count); }   // every cycle
+    void loop()  { value.write(count); count = count + 1; }   // every cycle
 }
 ```
+
+**Write first, then update — this is the single most common way a correct-looking
+first draft produces wrong values.** The example above emits `0, 1, 2, 3, …`. Swap
+the two statements and it emits `1, 2, 3, …`: the port carries what the register
+holds at the START of the cycle, so a value you compute and then write is already
+one cycle late.
+
+It costs nothing to get right and it is invisible until you check the vectors —
+the wrong version reads like careful code:
+
+```cg
+// WRONG — emits 1, 0, 1, 0 …            // RIGHT — emits 0, 1, 0, 1 …
+void loop() {                            void loop() {
+    state = (u1) (1 - state);                q.write(state);
+    q.write(state);                          state = (u1) (1 - state);
+}                                        }
+```
+
+Same for a recurrence — publish the current term, then advance:
+
+```cg
+task Fib {                               // emits 1, 1, 2, 3, 5, 8, 13, 21
+    out push u8 q;
+    u8 cur; u8 nxt;
+    void setup() { cur = 1; nxt = 1; }
+    void loop() {
+        q.write(cur);                    // publish FIRST
+        u8 t = (u8) (cur + nxt);         // then advance
+        cur = nxt;
+        nxt = t;
+    }
+}
+```
+
+Do not try to detect "the first iteration" by testing the state values
+(`if (prev2 == 0 && prev1 == 1) …`). Those guards go on matching a later state and
+latch the output forever. Order the statements correctly and no guard is needed.
 
 A task becomes a multi-state FSM automatically when `loop()` contains blocking
 operations: a `while` loop, a `fence` (end-of-cycle barrier), an `idle(n)`
@@ -202,7 +273,9 @@ read `cg_docs("fsm")` and seed `cg_example("fsm")` (`Seq1011`). Two timing rules
 the compiler enforces, and that break most first drafts: **(a)** a port reflects
 the register at the *start* of the cycle, so publish the CURRENT state and drive
 every output BEFORE the transition (writing a just-computed next state reads back
-one cycle late); **(b)** inline-initialize the state (`St st;` defaults to the
+one cycle late) — this is the same write-then-update rule as for ordinary state
+above, and it applies to EVERY state variable, not only to an enum state register;
+**(b)** inline-initialize the state (`St st;` defaults to the
 first enum member) rather than a `setup()` body — a `setup()` compiles to a
 separate reset STATE that eats the first clock and offsets the whole stream.
 
@@ -393,10 +466,9 @@ the sim log. A passing `cg_simulate` (ok: true) means the asserts held.
    expected value as a parameter/constant of the right width.
 7. **Width is strict** — cast explicitly when narrowing, and re-cast each step
    when accumulating (`sum = (T)(sum + x)`).
-8. **`/` and `%` only by a constant POWER OF TWO** (→ shift/mask). A
-   non-power-of-two constant divisor lowers to nothing and leaves the emitted
-   module broken while still reporting "Success!" — treat it like a runtime
-   divisor and use the `std.math.Divide` built-in or `cg_example("divide")`
+8. **`/` and `%` by any positive compile-time constant just work** (pow2 →
+   shift/mask, else a reciprocal multiply — both single-cycle). Only a RUNTIME
+   divisor needs the `std.math.Divide` built-in or `cg_example("divide")`
    (`Recip` / `Divide` / `SeqDiv`).
 9. **`continue` / `break` work inside loops** (`while` and `for`, nested OK).
    Only outside a loop is an error.
@@ -407,7 +479,14 @@ the sim log. A passing `cg_simulate` (ok: true) means the asserts held.
 11. **A full-width unsigned `<` compares as signed.** `(u32)0xFFFFFFFF < 1`
     reads as `-1 < 1` (true). For a true unsigned compare, widen past the sign
     bit: `(u33)a < (u33)b`. Signed compares use an explicit `(int<32>)` cast.
-12. **Reading a `push` input conditionally doesn't work — use a `stream`, or read
+12. **Write the port BEFORE updating the state it reads from.** `count = count + 1;
+    value.write(count);` emits `1,2,3…` where `value.write(count); count = count + 1;`
+    emits `0,1,2…`. A port carries the register as it stood at the START of the cycle.
+    This compiles and simulates either way — only the vectors differ — and it is the
+    most common cause of an otherwise-correct design failing its `test:` block. Applies
+    to every state variable, not just enum FSM registers. See *State, setup/loop and
+    FSMs* for worked right/wrong pairs.
+13. **Reading a `push` input conditionally doesn't work — use a `stream`, or read
     every cycle.** A `push` port has no back-pressure, so a value you skip on a
     cycle is lost. A `stream` (sync-ready) input CAN be read conditionally —
     `if (cnt == 0) acc = bias.read();` while reading the other streams every cycle

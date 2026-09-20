@@ -1,0 +1,44 @@
+package com.neosyn.examples.arith;
+
+// Running total — the accumulator, the simplest stateful datapath there is and
+// the shape behind every integrator, moving sum, packet-byte counter and
+// dot-product partial.
+//
+// ONE register, updated every cycle: `acc = acc + x`. Everything harder (FIR,
+// MAC, dot product) is this loop with a multiply in front of it.
+//
+// Timing, which is the only subtle part: an `out sync` write lands in the SAME
+// cycle as the reads, so writing AFTER the update publishes the total that
+// INCLUDES this cycle's input (1, 3, 6, …). Swap the two lines and you publish
+// the previous total instead — a one-cycle lag that is sometimes what you want
+// (a delayed/registered sum) and is the usual off-by-one in this block.
+//
+// `acc` is inline-initialised rather than set in setup(): a setup() would add a
+// reset state and offset the whole stream by a cycle.
+//
+// TO ADAPT:
+//   * saturating instead of wrapping — clamp before the write (see Clamp)
+//   * a moving sum over N — subtract the sample leaving the window
+//   * an integrator with a leak — `acc = acc - (acc >> k) + x`
+//   * MAC / dot product — accumulate `a*b` instead of `x` (see StreamDot)
+//
+// `sum` is u16 while `x` is u8: the accumulator MUST be wider than its input or
+// it wraps. Widen both together for longer runs.
+task Accumulator {
+    properties {
+        test: {
+            //     first four accumulate, then a 0 must HOLD the total, then resume
+            x:   [ 1, 2, 3,  4,  0,  5  ],
+            sum: [ 1, 3, 6,  10, 10, 15 ]
+        }
+    }
+
+    sync { in u8 x; out u16 sum; }
+
+    u16 acc = 0;                 // the running total; wider than `x` by design
+
+    void loop() {
+        acc = (u16)(acc + x.read());
+        sum.write(acc);          // publish AFTER the update — includes this cycle
+    }
+}

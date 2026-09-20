@@ -1,0 +1,183 @@
+package com.neosyn.examples.ecc;
+
+// Hamming SECDED — Single Error Correct, Double Error Detect. The error
+// correction in every ECC memory, every NAND controller, every register file that
+// has to survive a single-event upset, and every link too slow to retransmit.
+//
+// Encoder AND decoder in one block, with an ERROR-INJECTION port between them,
+// so the whole claim is testable in a plain vector fixture: `code` is the clean
+// codeword the encoder produced, `err` is a bit mask XORed into it (the "channel"
+// — 0x04 means bit 2 got flipped in transit), and `dout`/`corrected`/`dblerr` are
+// what the decoder makes of the damaged word. In a real design the two halves sit
+// at opposite ends of a memory or a wire and `err` is whatever the universe does.
+//
+// ---- THE CODE: extended Hamming(7,4), i.e. (8,4) ----
+// Bit POSITIONS are 1-based here because that is what makes the construction
+// work; the wire index is position - 1.
+//     pos 1 = p1   pos 2 = p2   pos 3 = d1   pos 4 = p4
+//     pos 5 = d2   pos 6 = d3   pos 7 = d4   pos 8 = p8 (overall parity)
+// Parity bits live at the POWER-OF-TWO positions, and each covers exactly the
+// positions whose index has its bit set:
+//     p1 covers 1,3,5,7    p2 covers 2,3,6,7    p4 covers 4,5,6,7
+// THAT is the trick, and it is worth understanding rather than memorising: recompute
+// the three parities over the RECEIVED word and the three results, read as a
+// binary number, ARE the position of the flipped bit. 0 means no error. There is
+// no lookup table and no search — the syndrome points straight at the damage.
+//
+// Hamming(7,4) alone has minimum distance 3: it corrects one error, but a DOUBLE
+// error lands on some other valid codeword's correction and it silently
+// "corrects" you to the wrong data. Adding p8, a parity over all seven other
+// bits, lifts the distance to 4 and separates the two cases:
+//     p8 fails, syndrome != 0  -> ONE error, at position `syn`. Fix it.
+//     p8 fails, syndrome == 0  -> the error is in p8 itself. Fix that.
+//     p8 holds, syndrome != 0  -> TWO errors. Detected, NOT correctable.
+//     p8 holds, syndrome == 0  -> clean (or four errors — no code is free).
+// The `dblerr` line is the entire value of the "DED" half: it converts a silent
+// wrong answer into a loud one, which is what lets a memory controller raise a
+// machine check instead of handing bad data to software.
+//
+// `dout` IS MEANINGLESS WHEN `dblerr` IS HIGH. There is no correct answer to
+// return — the block emits whatever the (wrong) syndrome pointed at. Look at the
+// test: vector 18 asks for 0xB and gets 0xE. That is not a bug, that is what
+// "detect but do not correct" means, and it is why the flag must be wired.
+//
+// ---- WHAT THE TEST PROVES ----
+//   * vectors 1-8: EVERY ONE of the eight single-bit error positions, injected
+//     one at a time into the codeword for 0xB, is corrected back to 0xB with
+//     `corrected` high — including vector 8, where the damaged bit is the parity
+//     bit p8 itself (syndrome 0, which the naive decoder mishandles).
+//   * vectors 11-13, 18-21: seven different DOUBLE-bit errors, on two different
+//     data words, all raise `dblerr` and all leave `corrected` low.
+//   * vectors 0, 9, 14-17: clean codewords for 0x0, 0x5, 0x6, 0x9, 0xB, 0xF pass
+//     through with both flags low.
+// Every number came from a Python model of exactly this arithmetic, which was
+// first checked EXHAUSTIVELY: all 16 data words x (1 clean + 8 single-bit + 28
+// double-bit error patterns) = 592 cases behave as claimed. The 22 vectors here
+// are the readable subset of that.
+//
+// TO ADAPT:
+//   * (72,64) SECDED, the DRAM/cache standard — same construction, 8 parity bits
+//     (7 Hamming + 1 overall) over 64 data bits. The parity equations become
+//     64-input XOR trees; generate them from the position masks rather than
+//     writing them out.
+//   * DETECT-ONLY — drop the correction mux and keep the syndrome compare. Much
+//     smaller, and correct when you can retransmit.
+//   * SEC only (no p8) — drop the overall parity. Do this only if a double error
+//     is genuinely impossible; otherwise you have built a machine that
+//     confidently corrupts data.
+//   * BURST errors (adjacent bits, the usual failure of a wire or a DRAM column)
+//     — Hamming is the wrong tool; INTERLEAVE several codewords so a burst hits
+//     one bit of each, or use Reed-Solomon.
+//   * pure DETECTION over a long message — use Crc8/CRC-32 instead. A CRC detects
+//     far more than it can locate; Hamming locates one bit and that is all.
+//
+// This is combinational: no registers, one answer per cycle, no latency. In a
+// memory path the encoder sits before the write and the decoder after the read,
+// and the syndrome logic is usually the critical path — pipeline it (a register
+// between syndrome and correction) if it does not meet timing.
+task HammingEcc {
+    properties {
+        test: {
+            //                |------ each of the 8 single-bit errors, in turn ------| ok  | clean |-- 2-bit errors --|  |------ clean words ------|  |------- more 2-bit errors -------|
+            din:       [ 0x0B, 0x0B, 0x0B, 0x0B, 0x0B, 0x0B, 0x0B, 0x0B, 0x0B, 0x0B,  0x05, 0x05, 0x05, 0x05,  0x00, 0x0F, 0x09, 0x06,  0x0B, 0x0B, 0x0B, 0x05 ],
+            // the injected error mask: 0 = clean channel, one bit = SEC, two bits = DED
+            err:       [ 0x00, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x00,  0x00, 0x03, 0x05, 0x81,  0x00, 0x00, 0x00, 0x00,  0x24, 0xC0, 0x12, 0x48 ],
+            // the CLEAN codeword — the encoder half, unaffected by `err`
+            code:      [ 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55,  0x2D, 0x2D, 0x2D, 0x2D,  0x00, 0xFF, 0xCC, 0x33,  0x55, 0x55, 0x55, 0x2D ],
+            // 0xB comes back from all eight single-bit hits. On a DOUBLE hit this
+            // value is GARBAGE by construction (0x0E, 0x03, ...) — that is what dblerr is for.
+            dout:      [ 0x0B, 0x0B, 0x0B, 0x0B, 0x0B, 0x0B, 0x0B, 0x0B, 0x0B, 0x0B,  0x05, 0x05, 0x04, 0x05,  0x00, 0x0F, 0x09, 0x06,  0x0E, 0x03, 0x09, 0x0D ],
+            corrected: [    0,    1,    1,    1,    1,    1,    1,    1,    1,    0,     0,    0,    0,    0,     0,    0,    0,    0,     0,    0,    0,    0 ],
+            dblerr:    [    0,    0,    0,    0,    0,    0,    0,    0,    0,    0,     0,    1,    1,    1,     0,    0,    0,    0,     1,    1,    1,    1 ]
+        }
+    }
+
+    sync {
+        in  u4   din;         // 4 data bits to protect
+        in  u8   err;         // error mask XORed into the codeword: the "channel"
+        out u8   code;        // the clean 8-bit codeword (encoder output)
+        out u4   dout;        // recovered data — VALID ONLY WHEN !dblerr
+        out bool corrected;   // a single-bit error was found and repaired
+        out bool dblerr;      // two bits are wrong: detected, NOT correctable
+    }
+
+    void loop() {
+        u4 d = din.read();
+        u8 e = err.read();
+
+        // ---------------- encode: 4 data bits -> 8-bit codeword ----------------
+        bool d1 = d[0];
+        bool d2 = d[1];
+        bool d3 = d[2];
+        bool d4 = d[3];
+
+        bool p1 = d1 ^ d2 ^ d4;                          // covers positions 1,3,5,7
+        bool p2 = d1 ^ d3 ^ d4;                          // covers positions 2,3,6,7
+        bool p4 = d2 ^ d3 ^ d4;                          // covers positions 4,5,6,7
+        bool p8 = p1 ^ p2 ^ d1 ^ p4 ^ d2 ^ d3 ^ d4;      // parity over all seven
+
+        // Packing bools into a word: a bool does NOT cast to an integer type in
+        // Cg ((u8) someBool is a type error), so select 1 or 0 with `? :`.
+        u8 cw = (u8) ((p1 ? 1 : 0)
+                   | ((p2 ? 1 : 0) << 1)
+                   | ((d1 ? 1 : 0) << 2)
+                   | ((p4 ? 1 : 0) << 3)
+                   | ((d2 ? 1 : 0) << 4)
+                   | ((d3 ? 1 : 0) << 5)
+                   | ((d4 ? 1 : 0) << 6)
+                   | ((p8 ? 1 : 0) << 7));
+        code.write(cw);
+
+        // ---------------- channel: inject the caller's error mask ---------------
+        u8 r = (u8) (cw ^ e);
+
+        // ---------------- decode: syndrome over the RECEIVED word ---------------
+        bool r1 = r[0];
+        bool r2 = r[1];
+        bool r3 = r[2];
+        bool r4 = r[3];
+        bool r5 = r[4];
+        bool r6 = r[5];
+        bool r7 = r[6];
+        bool r8 = r[7];
+
+        bool c1 = r1 ^ r3 ^ r5 ^ r7;                     // same cover sets as p1,
+        bool c2 = r2 ^ r3 ^ r6 ^ r7;                     // p2, p4 above — that is
+        bool c4 = r4 ^ r5 ^ r6 ^ r7;                     // what makes syn a POSITION
+
+        // read as a binary number, the three checks ARE the 1-based bit position
+        u3 syn = (u3) ((c1 ? 1 : 0) | ((c2 ? 1 : 0) << 1) | ((c4 ? 1 : 0) << 2));
+
+        bool cp = r1 ^ r2 ^ r3 ^ r4 ^ r5 ^ r6 ^ r7 ^ r8; // overall parity check
+
+        u8   fixed = r;
+        bool cor   = false;
+        bool dbl   = false;
+
+        if (cp) {
+            // parity is wrong -> an ODD number of bits is wrong -> assume ONE.
+            // `1 << syn` would be a variable shift (no barrel shifter, see
+            // BarrelShift), so mux the eight literal masks instead.
+            cor = true;
+            if      (syn == 1) { fixed = (u8) (r ^ 0x01); }
+            else if (syn == 2) { fixed = (u8) (r ^ 0x02); }
+            else if (syn == 3) { fixed = (u8) (r ^ 0x04); }
+            else if (syn == 4) { fixed = (u8) (r ^ 0x08); }
+            else if (syn == 5) { fixed = (u8) (r ^ 0x10); }
+            else if (syn == 6) { fixed = (u8) (r ^ 0x20); }
+            else if (syn == 7) { fixed = (u8) (r ^ 0x40); }
+            else               { fixed = (u8) (r ^ 0x80); }   // syn == 0: p8 itself
+        } else if (syn != 0) {
+            // parity holds but the Hamming checks do not: an EVEN number of bits
+            // is wrong. Two, in practice. Nothing to do but say so.
+            dbl = true;
+        }
+
+        dout.write((u4) ((fixed[2] ? 1 : 0)              // positions 3,5,6,7 are
+                      | ((fixed[4] ? 1 : 0) << 1)        // the data bits
+                      | ((fixed[5] ? 1 : 0) << 2)
+                      | ((fixed[6] ? 1 : 0) << 3)));
+        corrected.write(cor);
+        dblerr.write(dbl);
+    }
+}

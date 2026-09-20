@@ -6,12 +6,12 @@
     "url": "https://github.com/Neosyn-Logic/cg-agent-kit",
     "source": "github"
   },
-  "version": "0.2.2",
+  "version": "1.0.0",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "cg-agent-kit",
-      "version": "0.2.2",
+      "version": "1.0.0",
       "transport": {
         "type": "stdio"
       },

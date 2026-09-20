@@ -27,7 +27,10 @@ sys.path.insert(0, HERE)
 from cg_agent_kit import cg_mcp_server as cg
 from cg_vs_verilog_eval import complete, extract
 
-CG_CONTEXT = open(os.path.join(HERE, "cg_context.md")).read()
+CG_# The docs ship INSIDE the package; HERE is the repo root in a checkout,
+# so resolve through the package rather than beside this file.
+from cg_agent_kit import cg_mcp_server as _cg
+CONTEXT = (_cg._HERE / "cg_context.md").read_text()
 BASE_DOT = open(os.path.join(HERE, "examples", "DotProduct.cg")).read()
 
 Q = 1 << 16

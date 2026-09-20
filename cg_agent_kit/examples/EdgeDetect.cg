@@ -1,0 +1,84 @@
+package com.neosyn.examples.io;
+
+// Edge detector — turn a LEVEL into an EVENT. One flip-flop and three gates, and
+// the most-instantiated block in any real design: every "start" pulse, every
+// "button pressed", every "this signal just changed" comes from here.
+//
+// THE WHOLE BLOCK IS ONE DELAY REGISTER. Keep last cycle's value in `prev`, and
+// compare it with this cycle's:
+//     rise = din & ~prev      fall = ~din & prev      both = din ^ prev
+// Every strobe is exactly ONE cycle wide, whatever the input does afterwards.
+// That is the point: an FSM waiting on a level will re-trigger for as long as
+// the level is held; an FSM waiting on `rise` triggers once.
+//
+// The strobes are MEALY — `rise` goes high in the SAME cycle `din` goes high, so
+// there is no added latency. `dly` (the register itself) is exposed because it is
+// occasionally what you actually want: the input aligned one cycle later, to
+// match a datapath that has a register in it.
+//
+// TWO THINGS TO GET RIGHT BEFORE YOU USE THIS ON A REAL PIN:
+//   1. SYNCHRONISE FIRST. An input that comes from off-chip or another clock
+//      domain must go through a 2-flop synchroniser (`std.lib.SynchronizerFF`,
+//      or `SynchronizerMux` for a wide value) BEFORE this block, or metastability
+//      turns into a phantom edge. This block assumes `din` is already in your
+//      clock domain.
+//   2. DEBOUNCE IF IT BOUNCES. A mechanical contact produces hundreds of real
+//      edges per press, and this block faithfully reports every one of them. Put
+//      `Debounce` in front (it is this block plus hysteresis — a counter that
+//      makes a change wait N cycles before it counts) and take ITS rise/fall.
+//      Rule of thumb: clean logic signal -> EdgeDetect; anything touched by a
+//      human or a wire -> Debounce.
+//
+// TO ADAPT:
+//   * a WIDE value — `both` becomes `din != prev` on a u8/u32; that is a "value
+//     changed" strobe, which is how you turn a memory-mapped register into a
+//     write event.
+//   * a TOGGLE-to-PULSE converter (the classic CDC handshake) — synchronise the
+//     far-domain toggle, then take `both` here: one pulse per far-side event.
+//   * a STICKY flag instead of a pulse — latch `rise` into a bool and clear it
+//     when the consumer acknowledges (an interrupt-status bit).
+//   * a start-of-packet strobe — feed a framing/valid signal in and take `rise`.
+//
+// Timing: `prev` is inline-initialized to false (no setup(), which would add a
+// reset state and offset the whole stream), so a `din` that is already high in
+// cycle 0 produces a rise in cycle 0. If that is wrong for you, initialize `prev`
+// to the idle level of your signal instead.
+task EdgeDetect {
+    properties {
+        test: {
+            //        |-- long high --|      |- 1-cycle blip -|  |- back-to-back -|
+            din:  [ 0, 0, 1, 1, 1, 0, 0, 0,  1, 0, 1, 1, 0, 1, 0, 0 ],
+            // the register: din delayed by exactly one cycle
+            dly:  [ 0, 0, 0, 1, 1, 1, 0, 0,  0, 1, 0, 1, 1, 0, 1, 0 ],
+            // ONE cycle per event, however long the level is held afterwards
+            rise: [ 0, 0, 1, 0, 0, 0, 0, 0,  1, 0, 1, 0, 0, 1, 0, 0 ],
+            fall: [ 0, 0, 0, 0, 0, 1, 0, 0,  0, 1, 0, 0, 1, 0, 1, 0 ],
+            // both == rise | fall == din ^ dly: 4 rises + 4 falls = 8 edges
+            both: [ 0, 0, 1, 0, 0, 1, 0, 0,  1, 1, 1, 0, 1, 1, 1, 0 ]
+        }
+    }
+
+    sync {
+        in  bool din;    // a level, already synchronous to this clock
+        out bool rise;   // one cycle, on the 0 -> 1 transition
+        out bool fall;   // one cycle, on the 1 -> 0 transition
+        // `both` and not `edge`: `edge` is a Verilog keyword. Cg accepts it as a
+        // port name and escapes it (`\edge `) in the generated .v — legal, but a
+        // nuisance to connect to, and its companion `edge_valid` is NOT escaped.
+        out bool both;   // one cycle, on either transition
+        out bool dly;    // din delayed one cycle (the register itself)
+    }
+
+    bool prev = false;   // last cycle's din — the entire state of this block
+
+    void loop() {
+        bool d = din.read();
+
+        rise.write(d && !prev);      // Mealy: same cycle as the transition
+        fall.write(!d && prev);
+        both.write(d != prev);       // `bool != bool` is the idiomatic XOR
+        dly.write(prev);             // Moore: the register, published as-is
+
+        prev = d;
+    }
+}

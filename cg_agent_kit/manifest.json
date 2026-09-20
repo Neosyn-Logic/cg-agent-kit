@@ -283,13 +283,13 @@
         "logical-shift",
         "arithmetic-shift"
       ],
-      "use_when": "shift by a RUNTIME amount (Cg cannot emit a variable shift) \u2014 a mux tree of literal shifts",
+      "use_when": "shift by a RUNTIME amount (Cg cannot emit a variable shift) — a mux tree of literal shifts",
       "adapt": "drop the arms you don't need; widen the value/amount; SRA uses i32, SLL/SRL stay u32",
       "verified": {
         "sim": true,
         "yosys_cells": 445
       },
-      "note": "the canonical workaround for 'shift by a variable' \u2014 how barrel shifters are built in RTL (literal power-of-two shifts gated by each shift-amount bit)"
+      "note": "the canonical workaround for 'shift by a variable' — how barrel shifters are built in RTL (literal power-of-two shifts gated by each shift-amount bit)"
     },
     {
       "name": "RegisterFile",
@@ -365,13 +365,13 @@
         "duplicate",
         "fork"
       ],
-      "use_when": "replicate ONE push stream to two consumers (a bare push-output fan-out deadlocks the sim)",
+      "use_when": "replicate ONE push stream to two consumers when the branches must diverge (different rates, a transform on one side, or explicit replication in the netlist)",
       "adapt": "add y2/y3... output ports for more consumers; one Tee per fan-out point",
       "verified": {
         "sim": true,
         "yosys_cells": 33
       },
-      "note": "explicit 1->2 replicator \u2014 the fix for the push-output fan-out deadlock (see reference_cg_push_fanout_deadlock)"
+      "note": "explicit 1->2 replicator. NOT needed for plain fan-out: a bare push output wired to two consumers is a correct back-pressured broadcast (re-verified S166 in four shapes on both backends; the earlier 'fan-out deadlocks' note was wrong and cited a memory that does not exist)"
     },
     {
       "name": "Clamp",
@@ -781,6 +781,391 @@
         "yosys_cells": 48
       },
       "note": "The clock-GENERATING side of a synchronous serial bus, and the counterpart to the UART pair. SPI is FULL DUPLEX: one byte goes out on MOSI while another comes back on MISO in the same eight bit-times — there is no separate read transaction, which is why one `start` pulse carries both `tx` and `rx`. Unlike a UART the master owns the clock, so there is no baud agreement and no start/stop framing; `csn` frames the transfer instead. One SPI bit = TWO fabric clocks via the `ph` phase register: ph=0 sclk LOW (MOSI stable for the slave), ph=1 sclk HIGH (slave sampled MOSI on the rising edge, master samples MISO here, MOSI advances on the fall) — that is mode 0. `rx` HOLDS the last byte, so qualify it with `done`, same rule as UartRx's data/valid. sclk is fabric/2 here (the fastest possible); gate the body behind a Pwm tick to slow it. Verified: bytecode sim 21 vectors / 105 checks of a real full-duplex exchange — MOSI carries 0x53 MSB-first while 0xA5 is simultaneously clocked in, csn is low for exactly the 16 transfer cycles and high outside, one `done` pulse + yosys REAL (48 coarse cells; 84 cells / 43 FFs after full `synth -flatten`) + iverilog elaborates."
+    },
+    {
+      "name": "Accumulator",
+      "kind": "primitive",
+      "family": "arith",
+      "ops": [
+        "accumulate",
+        "sum",
+        "integrate",
+        "running-total"
+      ],
+      "tags": [
+        "accumulator",
+        "running total",
+        "running sum",
+        "accumulate",
+        "adds to a total",
+        "sum so far",
+        "integrator",
+        "counter of values",
+        "tally",
+        "subtotal"
+      ],
+      "use_when": "add each input to a running total held in a register and output it",
+      "adapt": "widen the accumulator for longer runs; subtract the leaving sample for a moving sum; accumulate a*b for a MAC; clamp before the write to saturate",
+      "verified": {
+        "sim": true,
+        "yosys_cells": 86
+      },
+      "note": "One register updated every cycle. The out sync write lands in the SAME cycle as the read, so publishing AFTER the update includes this cycle's input; swapping the two lines gives a one-cycle lag, which is the usual off-by-one here. The accumulator is wider than the input by design. yosys_cells measured with the documented coarse flow."
+    },
+    {
+      "name": "Lfsr",
+      "kind": "primitive",
+      "family": "control",
+      "ops": [
+        "lfsr",
+        "prbs",
+        "prng",
+        "shift-register",
+        "xor-feedback",
+        "scrambler"
+      ],
+      "tags": [
+        "lfsr",
+        "prbs",
+        "prng",
+        "pseudo-random",
+        "random",
+        "random number",
+        "noise",
+        "galois",
+        "fibonacci",
+        "maximal-length",
+        "primitive polynomial",
+        "scrambler",
+        "descrambler",
+        "test pattern",
+        "dither",
+        "bit generator",
+        "pattern generator"
+      ],
+      "use_when": "generate a pseudo-random bit or word per cycle — PRBS test patterns, scrambling/descrambling a serial link, dithering, randomised backoff, or a cheap substitute for a binary counter",
+      "adapt": "change the width of `st`/`prbs`, the bit index in `st[7]` and LFSR_POLY together (primitive low-words: u8 0x1D, u16 0x2D, u24 0x87, u32 0xC5) and update the period assert to 2^n - 1; feed a data bit into the feedback (`fb = st[7] ^ din`) and it becomes Crc8; XOR `dout` with a payload for a scrambler (the receiver must seed identically — that is what a link preamble is for)",
+      "verified": {
+        "sim": true,
+        "yosys_cells": 12
+      },
+      "note": "The Galois form: shift left, and XOR the polynomial back in when the bit shifted OUT is 1 — one XOR per bit rather than the Fibonacci form's feedback tree, so it runs faster for the same sequence. MAXIMAL LENGTH is the property that matters and it is CHECKED BY RUNNING IT: the companion `Lfsr_test` network free-runs the register and asserts the seed returns after exactly 255 cycles (2^8 - 1) while the state never visits 0. A wrong tap set fails loudly — 0x1B gives period 51, and the mutation test confirms both the vector fixture and the period assert fire. THE ONE FAILURE MODE: all-zero is a fixed point, so the seed must be non-zero; the monitor asserts against it every cycle. NOT a cryptographic RNG — n output bits reveal the state by linear algebra. `en` gates the register so the sequence survives gaps, `reseed` restarts it. Shows a FILE-SCOPE `const` (declared after the package and before the first entity) shared between the task and the test network's monitor. Verified: bytecode sim 24 vectors / 48 checks + the 255-cycle period network + iverilog VALUE sim 48/48 identical + ghdl analyses the VHDL clean + yosys REAL (12 coarse cells; 32 cells / 17 FFs after full `synth -flatten`), no inferred latches."
+    },
+    {
+      "name": "PriorityEncoder",
+      "kind": "primitive",
+      "family": "decode",
+      "ops": [
+        "priority",
+        "encode",
+        "first-set-bit",
+        "find-first",
+        "valid"
+      ],
+      "tags": [
+        "priority encoder",
+        "priority",
+        "encoder",
+        "first set bit",
+        "lowest set bit",
+        "find first",
+        "find first set",
+        "ffs",
+        "bit index",
+        "one-hot to binary",
+        "onehot",
+        "interrupt controller",
+        "interrupt",
+        "free list",
+        "allocator",
+        "leading zero",
+        "leading zero count",
+        "clz",
+        "normalise",
+        "arbitration"
+      ],
+      "use_when": "turn a request/bit vector into the INDEX of the first set bit plus a valid flag — interrupt controllers, free-list allocators, cache-way selection, float normalisers, and the encode step inside any arbiter",
+      "adapt": "reverse the if/else chain for MSB-first (highest bit wins = floor(log2)); output `W-1 - idx` for a leading-zero count; widen `req` and `idx` one `else if` per bit, and past ~8 bits split the word into groups, encode each, encode the group-valid vector with a second copy, and concatenate the two indices; add a rotating priority pointer and it becomes RoundRobinArbiter",
+      "verified": {
+        "sim": true,
+        "yosys_cells": 22
+      },
+      "note": "Pure combinational: no state, no clock behaviour, and the ORDER OF THE if/else CHAIN IS THE PRIORITY (lowest bit wins here). THE `valid` FLAG IS NOT OPTIONAL — index 0 is both a legal answer and the natural nothing-set default, so `idx` alone cannot tell 'requester 0 is asking' from 'nobody is asking'; a consumer that forgets to qualify it grants an idle bus to requester 0 forever. Same data/valid discipline as UartRx's byte. The fixture pins the priority rather than the popcount: 0x03 -> 0, 0x06 -> 1, 0xFF -> 0, 0xF0 -> 4. Mutation-tested by reordering the chain (bit 1 first), which the fixture catches. Verified: bytecode sim 16 vectors / 32 checks + iverilog VALUE sim 32/32 identical + ghdl analyses the VHDL clean + yosys REAL (22 coarse cells; 32 cells after full `synth -flatten`), no inferred latches."
+    },
+    {
+      "name": "RoundRobinArbiter",
+      "kind": "primitive",
+      "family": "control",
+      "ops": [
+        "arbiter",
+        "round-robin",
+        "fairness",
+        "grant",
+        "rotate",
+        "priority"
+      ],
+      "tags": [
+        "arbiter",
+        "arbitration",
+        "round robin",
+        "round-robin",
+        "fair",
+        "fairness",
+        "starvation",
+        "grant",
+        "request",
+        "bus arbiter",
+        "shared resource",
+        "scheduler",
+        "rotating priority",
+        "one-hot grant",
+        "multi-master",
+        "port arbitration"
+      ],
+      "use_when": "hand a shared resource (bus, memory port, output link, DSP tile) to one of N requesters per cycle without starving anyone — the fair alternative to a fixed-priority encoder",
+      "adapt": "widen req/grant/base/sel and add rotate cases + encoder branches for more requesters (past ~8, rotate a GROUP vector and use the two-level encoder from PriorityEncoder); gate the grant and the pointer update on a `done`/`last` input for multi-cycle burst ownership; add per-requester credit counters that mask `req` for weighted round-robin; replace the single pointer with an ordering register for LRU; delete `base` and the rotate to fall back to fixed priority",
+      "verified": {
+        "sim": true,
+        "yosys_cells": 38
+      },
+      "note": "ROTATE, ENCODE, ROTATE BACK — the standard construction that turns fair arbitration (hard) into fixed priority (an if/else chain). Rotate `req` right by the pointer so the requester with top priority lands in bit 0, run an ordinary lowest-bit-first encode (literally PriorityEncoder, narrowed), add the pointer back to get the real winner, then move the pointer to winner+1 so the winner now has the LOWEST priority. That last line IS the fairness invariant. There is no barrel shifter in Cg (see BarrelShift), so the rotate and the one-hot `1 << sel` are muxes over literal shifts — at N=4 that is the entire cost of fairness. FAIRNESS IS CHECKED EXPLICITLY, not just 'someone got granted': with all four requesting for eight straight cycles the grants are 0,1,2,3,0,1,2,3 — each requester served exactly twice, never twice in a row, where a fixed-priority arbiter would print requester 0 eight times. The fixture also pins that the pointer SKIPS silent requesters (req=0b1010 alternates 1,3,1,3 rather than wasting turns), HOLDS while nobody asks (no drift), and does not force a hand-off when only one requester wants the bus. Mutation-tested by disabling the pointer update — the fixture fails immediately. Verified: bytecode sim 19 vectors / 57 checks + iverilog VALUE sim 57/57 identical + ghdl analyses the VHDL clean + yosys REAL (38 coarse cells, 21 muxes + 2 adders; 53 cells / 10 FFs after full `synth -flatten`), no inferred latches."
+    },
+    {
+      "name": "GrayCounter",
+      "kind": "primitive",
+      "family": "control",
+      "ops": [
+        "gray-code",
+        "counter",
+        "encode",
+        "decode",
+        "cdc",
+        "xor-prefix"
+      ],
+      "tags": [
+        "gray code",
+        "gray",
+        "gray counter",
+        "reflected binary",
+        "binary to gray",
+        "gray to binary",
+        "one bit change",
+        "clock domain crossing",
+        "cdc",
+        "async fifo pointer",
+        "fifo pointer",
+        "metastability",
+        "position encoder",
+        "shaft encoder",
+        "rotary encoder",
+        "low power bus"
+      ],
+      "use_when": "count in a code where only ONE bit changes per step — a pointer that has to be sampled by another clock domain (async FIFO), an absolute position/shaft encoder, or a low-toggle-rate bus; also the reference for the binary<->Gray conversions themselves",
+      "adapt": "widen everything together — the decode needs one XOR term per bit (u8: >>1..>>7, or a two-stage prefix tree), and a Gray counter is only single-bit-change if its length is a power of two (a mod-10 Gray sequence must be hand-built); take `gray` through `std.lib.SynchronizerFF` per bit and decode in the far domain for a CDC pointer; keep only the decode half for a position encoder",
+      "verified": {
+        "sim": true,
+        "yosys_cells": 23
+      },
+      "note": "Counts in BINARY and derives Gray — the right way round, because the Gray->binary decode is an XOR PREFIX (W-1 logic levels) and you do not want it on every use. The two conversions are one line each: `g = b ^ (b>>1)` and `b = g ^ (g>>1) ^ (g>>2) ^ (g>>3)`; the fixture checks the ROUND TRIP by requiring `decoded == bin` on every cycle. THE DEFINING PROPERTY IS CHECKED IN HARDWARE: `onestep` compares this cycle's Gray word with last cycle's and asserts the difference is a single bit, via the power-of-two test `d != 0 && (d & (d-1)) == 0`. The fixture pins it high on every cycle following an increment INCLUDING the 15 -> 0 wrap (Gray 8 -> 0), which is the case a naive implementation gets wrong, and low while `en` is low because no step happened — it is a check on increments, not a property of the wire. WHY IT MATTERS: a binary 7 -> 8 sampled by an unrelated clock can read as 15 or 0, values the counter never held; with Gray only one bit is ever in flight so the worst case is the old value or the new one. That is the async-FIFO pointer rule, and this project shipped a VHDL AsynchronousFIFO that crossed BINARY pointers for exactly this reason — prefer `std.fifo.AsynchronousFIFO`, which now Gray-codes them. Mutation-tested with `b ^ (b>>2)`, caught by the fixture. Verified: bytecode sim 21 vectors / 84 checks + iverilog VALUE sim 84/84 identical + ghdl analyses the VHDL clean + yosys REAL (23 coarse cells; 51 cells / 17 FFs after full `synth -flatten`), no inferred latches."
+    },
+    {
+      "name": "EdgeDetect",
+      "kind": "primitive",
+      "family": "control",
+      "ops": [
+        "edge-detect",
+        "pulse",
+        "strobe",
+        "delay-register",
+        "one-shot"
+      ],
+      "tags": [
+        "edge detector",
+        "edge detect",
+        "rising edge",
+        "falling edge",
+        "both edges",
+        "posedge",
+        "negedge",
+        "pulse",
+        "strobe",
+        "one shot",
+        "one-cycle pulse",
+        "level to pulse",
+        "level to event",
+        "change detect",
+        "toggle to pulse",
+        "start pulse",
+        "trigger"
+      ],
+      "use_when": "turn a LEVEL into a one-cycle EVENT — every 'start' strobe, every 'this just changed', every level-to-pulse conversion; the smallest and most-instantiated block in a design",
+      "adapt": "compare a WIDE value (`din != prev` on a u8/u32) for a 'value changed' / register-write strobe; take `both` after a 2-flop synchroniser for the classic toggle-to-pulse CDC handshake; latch `rise` into a sticky bool cleared by the consumer for an interrupt-status bit; initialize `prev` to your signal's idle level if a cycle-0 edge is wrong for you",
+      "verified": {
+        "sim": true,
+        "yosys_cells": 12
+      },
+      "note": "ONE delay register and three gates: rise = din & ~prev, fall = ~din & prev, both = din ^ prev, and every strobe is exactly one cycle wide however long the level is held afterwards. That is the point — an FSM waiting on a level re-triggers forever; an FSM waiting on `rise` triggers once. The strobes are MEALY (same cycle as the transition, no added latency); `dly` exposes the register itself for aligning a datapath. TWO PRECONDITIONS, both in the header: (1) SYNCHRONISE FIRST — an off-chip or cross-domain input needs `std.lib.SynchronizerFF` in front or metastability becomes a phantom edge; (2) DEBOUNCE IF IT BOUNCES — a mechanical contact produces hundreds of real edges and this block faithfully reports all of them, so use `Debounce` (which is this block plus a hysteresis counter) and take ITS rise/fall. Rule of thumb: clean logic signal -> EdgeDetect, anything touched by a human or a wire -> Debounce. NAMING TRAP recorded in the source: the third output is `both`, not `edge`, because `edge` is a Verilog keyword — Cg accepts it and emits the escaped identifier `\\edge ` while its companion `edge_valid` is NOT escaped, which is legal but unpleasant to wire up. Mutation-tested (rise = d || !prev), caught by the fixture. Verified: bytecode sim 16 vectors / 64 checks — 4 rises, 4 falls, 8 both, including a 1-cycle blip and back-to-back edges + iverilog VALUE sim 64/64 identical + ghdl analyses the VHDL clean + yosys REAL (12 coarse cells; 9 cells / 6 FFs after full `synth -flatten`), no inferred latches."
+    },
+    {
+      "name": "Biquad",
+      "kind": "primitive",
+      "family": "dsp",
+      "ops": [
+        "iir",
+        "biquad",
+        "filter",
+        "fixed-point",
+        "multiply-accumulate",
+        "feedback"
+      ],
+      "tags": [
+        "biquad",
+        "iir",
+        "iir filter",
+        "second order section",
+        "sos",
+        "direct form",
+        "direct form i",
+        "low pass",
+        "high pass",
+        "band pass",
+        "notch",
+        "shelf",
+        "peaking eq",
+        "equaliser",
+        "dc blocker",
+        "loop filter",
+        "fixed point filter",
+        "q format",
+        "butterworth",
+        "rbj cookbook"
+      ],
+      "use_when": "a second-order IIR filter section in fixed point — low/high/band-pass, notch, shelf, peaking EQ, DC blocker or PLL loop filter; cascade several for higher order",
+      "adapt": "recompute b0,b1,b2,a1,a2 (RBJ cookbook / scipy butter, iirnotch, ...), multiply by 2^QS and round — nothing else changes; a DC blocker is b=[1,-1,0], a=[1,-0.995,0]; instantiate once per section and chain them for higher order (cascade in increasing Q); clamp the output instead of letting it wrap (see Clamp) — an IIR that wraps can enter a permanent limit cycle; raise QS with the coefficient and accumulator widths for a closer match to the designed response; add `(1 << (QS-1))` before the shift to round instead of truncate",
+      "verified": {
+        "sim": true,
+        "yosys_cells": 15
+      },
+      "note": "Direct Form I: y[n] = b0*x[n] + b1*x[n-1] + b2*x[n-2] - a1*y[n-1] - a2*y[n-2]. Five multiplies, four adds, four registers, one wide accumulator and NO intermediate rounding. Q FORMAT IS STATED EXPLICITLY, because leaving it implicit is how a day disappears: coefficients are Q2.14 signed (value * 2^14; range [-2, 2), the tightest format that always holds a stable biquad's a1), samples are plain integers but may be any consistent Qm.n since the filter is linear, and the i32 accumulator is sized from max|x|*(|b0|+|b1|+|b2|) + max|y|*(|a1|+|a2|) ~ 8e8. THE THREE TRAPS, all documented in the source: (1) `>> 14` FLOORS, it does not round, and the feedback path recirculates the bias — which is why the step response settles at 997 not 1000, and the fixture deliberately pins the truncating behaviour because that is the hardware; (2) the FEEDBACK MUST USE THE TRUNCATED output, not the wide accumulator, or you have built a different filter than the one you simulate; (3) DF-I over DF-II in hardware — the two extra registers are free and DF-II's internal state has a dynamic range unrelated to the signal's. Coefficients are an RBJ Butterworth low-pass at fc = fs/8, Q = 0.7071. The fixture is the STEP RESPONSE (rise, ~5% overshoot to 1054, settle, decay, then a negative step for the sign path), generated by an integer Python model of exactly this arithmetic and cross-checked against a float reference (max deviation 2.3 LSB, all truncation bias). Mutation-tested by moving ONE coefficient by ONE LSB (B1 3199 -> 3200) — the fixture catches it. Verified: bytecode sim 28 vectors / 28 checks + iverilog VALUE sim 28/28 identical (so the signed multiplies and the arithmetic right shift survive the Verilog backend, cf. the signedness traps in feedback_compiler) + ghdl analyses the VHDL clean + yosys REAL with all FIVE $mul cells present (15 coarse cells; 3291 cells / 65 FFs after full `synth -flatten`, i.e. the multipliers are genuinely there and would map to DSP tiles)."
+    },
+    {
+      "name": "Manchester",
+      "kind": "primitive",
+      "family": "control",
+      "ops": [
+        "line-coding",
+        "encode",
+        "decode",
+        "serial",
+        "clock-recovery",
+        "round-trip"
+      ],
+      "tags": [
+        "manchester",
+        "manchester encoding",
+        "line code",
+        "line coding",
+        "biphase",
+        "self clocking",
+        "clock recovery",
+        "dc balance",
+        "ac coupled",
+        "10base-t",
+        "ethernet phy",
+        "rfid",
+        "nfc",
+        "ir remote",
+        "dali",
+        "encoder decoder",
+        "coding violation",
+        "preamble"
+      ],
+      "use_when": "send data down one wire with no separate clock — a self-clocking, DC-balanced line code with an encoder/decoder pair (10BASE-T, RFID/NFC, IR remotes, DALI)",
+      "adapt": "invert `line` (and the recovered bit) for Manchester II / G.E. Thomas polarity; encode by presence/absence of a transition at the START of the bit for DIFFERENTIAL Manchester (immune to a swapped pair); gate both blocks behind one Pwm `tick` at twice the bit rate for a real line rate; add a preamble generator and a preamble detector (a shift register + compare, see Seq1011) for framing; the same skeleton with different transition rules gives BIPHASE MARK / FM0 (S/PDIF, AES3)",
+      "verified": {
+        "sim": true,
+        "yosys_cells": 29
+      },
+      "note": "An encoder AND a decoder, each with its own vector fixture, PLUS a `Manchester_test` network that wires them back to back and asserts the ROUND TRIP — 0xB2 in, 0xB2 out. bit 1 -> low then high, bit 0 -> high then low (IEEE 802.3; the opposite of G.E. Thomas / Manchester II, and the two are endlessly confused — say which you mean). WHAT IT BUYS: a transition in the middle of EVERY bit, so clock recovery always has something to lock to, and exactly half of every bit-time is high, so DC balance is exact and data-independent and the link can be transformer- or capacitor-coupled. WHAT IT COSTS: two line transitions per data bit — half the payload rate of NRZ, which is why gigabit links scramble (see Lfsr) instead. THE THIRD PROPERTY, and it is not an afterthought: the code is SELF-CHECKING. High or low for a whole bit-time is not a legal symbol, so `viol` reports a missing mid-bit transition — 10BASE-T transmits exactly such an illegal symbol as its end-of-frame delimiter. Both blocks run at TWO CLOCKS PER BIT off one phase register, so the encoder expects `din` HELD for the whole bit-time (which is what a real source does). DELIBERATELY OMITTED: phase acquisition — these two start in phase because they start together; a real receiver oversamples 4x-16x or locks to a preamble (that is what Ethernet's 1010... is for). Mutation-tested twice — inverting the encoder polarity and making the decoder take the FIRST half-bit — both caught. Verified: bytecode sim ManchesterEnc 16 vectors / 32 checks + ManchesterDec 24 vectors / 72 checks (including two deliberate coding violations and recovery afterwards) + the round-trip network + iverilog VALUE sim 32/32 and 72/72 identical + ghdl analyses the VHDL clean + yosys REAL (11 + 18 coarse cells; 9 cells / 5 FFs and 15 cells / 9 FFs after full `synth -flatten`), no inferred latches."
+    },
+    {
+      "name": "HammingEcc",
+      "kind": "primitive",
+      "family": "ecc",
+      "ops": [
+        "ecc",
+        "hamming",
+        "secded",
+        "syndrome",
+        "parity",
+        "error-correction"
+      ],
+      "tags": [
+        "hamming",
+        "hamming code",
+        "ecc",
+        "secded",
+        "sec-ded",
+        "error correction",
+        "error correcting code",
+        "single error correct",
+        "double error detect",
+        "syndrome",
+        "parity bits",
+        "bit flip",
+        "soft error",
+        "seu",
+        "single event upset",
+        "memory protection",
+        "scrubbing",
+        "radiation",
+        "nand controller"
+      ],
+      "use_when": "correct a single-bit error and DETECT a double-bit error in a stored or transmitted word — ECC memory, NAND controllers, registers that must survive a single-event upset, and links too slow to retransmit",
+      "adapt": "scale to the (72,64) DRAM/cache standard with 8 parity bits (7 Hamming + 1 overall) over 64 data bits — generate the 64-input XOR trees from the position masks rather than writing them out; drop the correction mux for detect-only (much smaller, and right when you can retransmit); drop the overall parity for SEC-only ONLY if a double error is genuinely impossible, or you have built a machine that confidently corrupts data; INTERLEAVE several codewords, or use Reed-Solomon, for burst errors; use Crc8/CRC-32 for pure detection over a long message",
+      "verified": {
+        "sim": true,
+        "yosys_cells": 119
+      },
+      "note": "Extended Hamming(7,4) = (8,4) SECDED, with the encoder, the decoder AND an ERROR-INJECTION port in one block, so the entire claim is testable in a plain vector fixture: `code` is the clean codeword, `err` is a bit mask XORed into it (the channel), and dout/corrected/dblerr are what the decoder makes of the damage. THE CONSTRUCTION, worth understanding rather than memorising: parity bits sit at the POWER-OF-TWO positions and each covers the positions whose index has its bit set (p1: 1,3,5,7 · p2: 2,3,6,7 · p4: 4,5,6,7), so recomputing the three parities over the received word and reading the results as a binary number gives THE POSITION of the flipped bit directly — no table, no search. Plain Hamming(7,4) has distance 3 and silently 'corrects' a double error to the wrong data; the overall parity p8 lifts it to distance 4 and separates the four cases (parity fails + syndrome != 0 -> one error at `syn`; parity fails + syndrome 0 -> the error is in p8 itself; parity holds + syndrome != 0 -> TWO errors, detected not correctable; both clean -> clean). THE DED HALF IS THE WHOLE VALUE: it turns a silent wrong answer into a loud one. `dout` IS MEANINGLESS WHEN `dblerr` IS HIGH and the fixture shows it (vector 18 asks for 0xB and gets 0xE) — that is what 'detect but do not correct' means. `1 << syn` would be a variable shift, so the correction is a mux over eight literal masks (see BarrelShift). Also demonstrates the bool-packing idiom: `(u8) someBool` is a TYPE ERROR in Cg, so bits are packed with `(b ? 1 : 0) << k`. The Python oracle was checked EXHAUSTIVELY first — all 16 data words x (1 clean + 8 single-bit + 28 double-bit patterns) = 592 cases — and the 22 shipped vectors are its readable subset, covering every one of the 8 single-bit positions (including a hit on p8 itself, syndrome 0, which a naive decoder mishandles) and 7 different double-bit errors. Mutation-tested by dropping one term from p2. Verified: bytecode sim 22 vectors / 88 checks + iverilog VALUE sim 88/88 identical + ghdl analyses the VHDL clean + yosys REAL (119 coarse cells: 36 $xor for the parity trees + 43 $mux for the correction; 99 cells after full `synth -flatten`), no inferred latches."
+    },
+    {
+      "name": "MovingAverage",
+      "kind": "primitive",
+      "family": "dsp",
+      "ops": [
+        "moving-average",
+        "sliding-window",
+        "running-sum",
+        "filter",
+        "circular-buffer"
+      ],
+      "tags": [
+        "moving average",
+        "sliding window",
+        "running sum",
+        "running average",
+        "boxcar",
+        "smoothing",
+        "smooth",
+        "low pass",
+        "average",
+        "mean",
+        "rolling average",
+        "circular buffer",
+        "ring buffer",
+        "adc filter",
+        "sensor smoothing",
+        "denoise",
+        "rate estimate"
+      ],
+      "use_when": "smooth a stream by averaging the last N samples — an ADC reading, a sensor, a packet-rate estimate, or an error signal in front of a control loop",
+      "adapt": "change N with the array size and the width of `wp` (u3 addresses 8, u4 addresses 16) and keep `acc` wide enough for N*max(x); make x/win/acc signed for signed samples; swap the array for `std.mem.SinglePortRAM` for a large window so it maps to block RAM; use Fir instead when you want a shaped response (a moving average has a poor sinc-shaped stopband and is chosen for its price); use `acc = acc - (acc >> k) + x` (see Accumulator) for an EXPONENTIAL moving average with no buffer and no warm-up",
+      "verified": {
+        "sim": true,
+        "yosys_cells": 65
+      },
+      "note": "THE TRICK IS THE RUNNING SUM: the window only changes by one sample per cycle, so `acc = acc - (the sample leaving) + (the new one)` is one add and one subtract regardless of N — O(1) arithmetic with O(N) storage, in a circular buffer indexed by a wrapping write pointer (a runtime array index, as in RegisterFile). This block is Accumulator plus a subtraction. READ `win[wp]` BEFORE WRITING IT — `wp` points at the oldest sample AND at the slot the newest goes into, so the wrong line order subtracts the sample you just wrote and the sum drifts forever; the mutation test drops the subtraction entirely and the fixture catches it. `full` IS NOT DECORATION: the buffer starts zero-filled, so for the first N-1 cycles the average is diluted by samples that never existed (the fixture shows the output ramping 1, 3, 7, 12 while the input is already 10, 20, 30, 40) — ignore `avg` until `full`, or preload every slot with the first sample. DIVIDING BY N COSTS NOTHING AND N NEED NOT BE A POWER OF TWO: the compiler folds `acc / 8` to a shift and `acc / 10` or `acc / 3` to a single-cycle reciprocal multiply, so pick the window your signal wants; only a RUNTIME divisor needs std.math.Divide. `acc` must hold N*max(x) or it wraps. The fixture drives a lone 200 into a stream of 80s and pins both halves of the smoothing: the average moves by 20 rather than 120, and vector 19 is the moment the spike slides OUT of the window again (95 -> 80). Verified: bytecode sim 23 vectors / 69 checks + iverilog VALUE sim 69/69 identical + ghdl analyses the VHDL clean + yosys REAL (65 coarse cells: $add/$sub plus the 8-deep register window; 413 cells / 89 FFs after full `synth -flatten`), no inferred latches."
     }
   ]
 }
