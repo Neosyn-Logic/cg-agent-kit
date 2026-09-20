@@ -39,6 +39,31 @@ IVERILOG_OK = shutil.which("iverilog") is not None and shutil.which("vvp") is no
 OSS_JAR = cg.Path.home() / "neosyn/cg-compiler/releng/lsp-server/target/cg-language-server.jar"
 OSS_JAR_OK = OSS_JAR.is_file()
 
+# Which jar is this? The kit supports BOTH compilers, and the two differ in ways
+# that are features of the build, not faults of the kit:
+#   * the fast bytecode simulator ships only with the commercial distribution;
+#   * file-scope `const`/`typedef`/`struct`/`enum` are commercial-only too --
+#     the open build answers `missing EOF at 'const'`, which the kit's own hint
+#     text already explains to users.
+# Tests that depend on either must SKIP on a jar that lacks it, not fail: CI's
+# integration job runs the OPEN jar on purpose, and a red suite there says
+# "the kit is broken" when it means "this compiler does not do that".
+# Probed, never assumed from a jar path or a version string.
+BYTECODE_OK = bool(cg.probe_bytecode().get("available")) if JAR_OK else False
+
+
+def _file_scope_supported() -> bool:
+    if not JAR_OK:
+        return False
+    try:
+        return bool(cg.check("package t;\nconst int N = 4;\n"
+                             "task Foo { out sync u8 y; void loop() { y.write(N); } }\n")["ok"])
+    except Exception:
+        return False
+
+
+FILE_SCOPE_OK = _file_scope_supported()
+
 try:  # the `mcp` package is only needed to RUN as a server, not to test the core
     import mcp  # noqa: F401
     MCP_OK = True
@@ -644,6 +669,7 @@ class TestCapabilities(unittest.TestCase):
     def tearDown(self):
         cg.JAR, cg._BYTECODE_PROBE = self._jar, self._probe
 
+    @unittest.skipUnless(BYTECODE_OK, "by its own name: only meaningful on the commercial jar")
     def test_probe_finds_the_bytecode_simulator_on_the_commercial_jar(self):
         cg._BYTECODE_PROBE = None
         r = cg.probe_bytecode(force=True)
@@ -654,6 +680,7 @@ class TestCapabilities(unittest.TestCase):
         cg._BYTECODE_PROBE = {"available": False, "reason": "sentinel", "detail": ""}
         self.assertEqual(cg.probe_bytecode()["reason"], "sentinel")
 
+    @unittest.skipUnless(BYTECODE_OK, "asserts the bytecode backend is listed")
     def test_capabilities_reports_what_is_here(self):
         cg._BYTECODE_PROBE = None
         c = cg.capabilities()
@@ -739,6 +766,7 @@ class TestScaffoldShape(unittest.TestCase):
 
 
 @unittest.skipUnless(JAR_OK, "compiler jar not built")
+@unittest.skipUnless(BYTECODE_OK, "scaffold VERIFIES by simulating; needs the bytecode simulator")
 class TestScaffoldVerifies(unittest.TestCase):
     """The two invariants the scaffold is only worth shipping WITH.
 
@@ -819,6 +847,7 @@ class TestAuthoringHintsAgainstTheRealCompiler(unittest.TestCase):
                       f"compiler failed but no hint attached: {r['diagnostics']}")
         return r["suggestion"]
 
+    @unittest.skipUnless(FILE_SCOPE_OK, "file-scope declarations are commercial-only")
     def test_file_scope_const_compiles(self):
         # This used to be the canonical PARSE ERROR here: `const` after `package` is
         # what a model writes when it wants a width parameter. It is now LEGAL, so the
@@ -979,6 +1008,7 @@ class TestAuthoringHintsAgainstTheRealCompiler(unittest.TestCase):
 
 
 @unittest.skipUnless(JAR_OK, "compiler jar not built")
+@unittest.skipUnless(BYTECODE_OK, "the bytecode simulator is commercial-only")
 class TestSimulateBytecode(unittest.TestCase):
     def test_recipe_passes(self):
         r = cg.simulate(_counter_src())
@@ -1307,6 +1337,7 @@ class TestSimFindings(unittest.TestCase):
         self.assertEqual(cg._sim_findings(None), ([], []))
 
 
+@unittest.skipUnless(BYTECODE_OK, "`verified`/`ran` come from a bytecode run")
 class TestVerifiedSemantics(unittest.TestCase):
     """`ok` must mean VERIFIED, not merely ran. The simulator reports
     "completed successfully" for a design that checks nothing, and the kit used
@@ -1433,6 +1464,7 @@ class TestPushedExamplesAreValid(unittest.TestCase):
     def test_there_is_at_least_one(self):
         self.assertTrue(self._shape_examples(), "no shape examples wired")
 
+    @unittest.skipUnless(BYTECODE_OK, "VERIFIES by simulating; needs the bytecode simulator")
     def test_every_shape_example_compiles_and_verifies(self):
         for pattern, src in self._shape_examples():
             with self.subTest(rule=pattern[:40]):
@@ -1452,6 +1484,7 @@ class TestPushedExamplesAreValid(unittest.TestCase):
 
 
 
+@unittest.skipUnless(BYTECODE_OK, "these validator warnings are emitted by the commercial compiler")
 class TestValidatorWarningsReachTheModel(unittest.TestCase):
     """A program the IDE flags used to come back from cg_check as flatly "ok".
 

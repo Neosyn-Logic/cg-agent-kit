@@ -19,13 +19,14 @@ jobs:
         run: |
           pip install build
           python -m build
-          python -m py_compile cg_agent_kit/cg_mcp_server.py cg_local_client.py cg_adapt_demo.py test_cg_mcp_server.py
+          python -m py_compile neosyn_fpga_mcp/cg_mcp_server.py cg_agent_kit/cg_mcp_server.py \
+            cg_local_client.py cg_adapt_demo.py test_cg_mcp_server.py
       - name: Validate the example dictionary
         run: |
           python - <<'PY'
           import json, pathlib
-          entries = json.load(open("cg_agent_kit/manifest.json"))["entries"]
-          ex = {p.stem for p in pathlib.Path("cg_agent_kit/examples").glob("*.cg")}
+          entries = json.load(open("neosyn_fpga_mcp/manifest.json"))["entries"]
+          ex = {p.stem for p in pathlib.Path("neosyn_fpga_mcp/examples").glob("*.cg")}
           print(f"{len(entries)} dictionary entries, {len(ex)} example .cg files")
           assert entries and ex, "empty dictionary or examples"
           print("manifest OK")
