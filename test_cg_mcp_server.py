@@ -17,8 +17,12 @@ drift with the compiler/yosys; the tests assert types, shapes, ok-flags, and
 error substrings instead.
 """
 import asyncio
+import json
 import os
 import re
+import subprocess
+import sys
+import tempfile
 import pathlib
 import shutil
 import unittest
@@ -169,6 +173,84 @@ class TestDiagnostics(unittest.TestCase):
 
     def test_no_diagnostics_clean_output(self):
         self.assertEqual(cg._diagnostics("all good, nothing to see\n"), [])
+
+
+def _input_schema(tool):
+    """`Tool.input_schema` in older `mcp`, `Tool.inputSchema` in newer ones.
+    Accept both: pinning one spelling makes the suite fail on a library version
+    the server itself is perfectly happy with."""
+    for attr in ("inputSchema", "input_schema"):
+        if hasattr(tool, attr):
+            return getattr(tool, attr)
+    raise AttributeError(f"no input-schema attribute on {type(tool).__name__}")
+
+
+class TestBothPackageNamesResolveWhenInstalled(unittest.TestCase):
+    """The rename's compatibility claim, CHECKED rather than asserted in a docstring.
+
+    1.1.0 renamed `cg_agent_kit` -> `neosyn_fpga_mcp` and left a shim so that
+    `python -m cg_agent_kit.cg_mcp_server` keeps working -- which is exactly how
+    the AccelOne MCP host launches it. That promise was verified from the repo
+    root, where BOTH names import as plain directories on `sys.path`, and was
+    broken everywhere else: a stale editable install mapped only the old name,
+    the shim imported a package its finder had never heard of, and the server
+    died on start. A model then gets zero tools.
+
+    Two things this has to get right, both learned the hard way:
+
+    * run in a SUBPROCESS from a NEUTRAL cwd with the repo off the path -- the
+      repo-root cwd is what masked the fault in the first place;
+    * key the requirement on an installed DISTRIBUTION, not on whether an import
+      succeeds. In the broken state BOTH imports failed (the shim raises while
+      resolving the new name), so an "if either imports, require both" rule
+      would have SKIPPED exactly when it mattered. The `.dist-info` was present
+      throughout, which is the signal that actually distinguishes "not installed"
+      from "installed one-sidedly".
+    """
+
+    NAMES = ("neosyn_fpga_mcp", "cg_agent_kit")
+    DISTS = ("neosyn-fpga-mcp", "cg-agent-kit")
+
+    def _run(self, code, cwd):
+        env = dict(os.environ)
+        env.pop("PYTHONPATH", None)
+        return subprocess.run([sys.executable, "-c", code], cwd=cwd, env=env,
+                              capture_output=True, text=True, timeout=120)
+
+    def test_an_installed_distribution_exposes_BOTH_import_names(self):
+        with tempfile.TemporaryDirectory() as neutral:
+            probe = self._run(
+                "import importlib.metadata as m, json\n"
+                "found = []\n"
+                "for d in ('neosyn-fpga-mcp','cg-agent-kit'):\n"
+                "    try:\n"
+                "        m.version(d); found.append(d)\n"
+                "    except Exception: pass\n"
+                "print(json.dumps(found))", neutral)
+            self.assertEqual(probe.returncode, 0, probe.stderr[-300:])
+            installed = json.loads(probe.stdout.strip() or "[]")
+            if not installed:
+                self.skipTest("neither distribution is installed in this interpreter")
+            for name in self.NAMES:
+                r = self._run(f"import {name}.cg_mcp_server", neutral)
+                self.assertEqual(
+                    r.returncode, 0,
+                    f"{installed} is installed but `import {name}.cg_mcp_server` "
+                    f"fails -- a one-sided install. Re-run `pip install -e .` "
+                    f"after a rename.\n{r.stderr.strip()[-400:]}")
+
+    def test_the_two_names_are_the_same_module_object(self):
+        """Two copies of the module would mean two copies of its state."""
+        with tempfile.TemporaryDirectory() as neutral:
+            if self._run("import neosyn_fpga_mcp.cg_mcp_server", neutral).returncode != 0:
+                self.skipTest("package not installed in this interpreter")
+            probe = self._run(
+                "import cg_agent_kit.cg_mcp_server as a, "
+                "neosyn_fpga_mcp.cg_mcp_server as b; "
+                "raise SystemExit(0 if a is b else 1)", neutral)
+        self.assertEqual(probe.returncode, 0,
+                         f"the shim is a second module object, not an alias: "
+                         f"{probe.stderr.strip()[-300:]}")
 
 
 class TestSourceUsageGuard(unittest.TestCase):
@@ -1811,7 +1893,7 @@ class TestRosterThroughTheRealServer(unittest.TestCase):
         # 13 argument-less tools.
         srv = cg.build_server()
         tools = {t.name: t for t in asyncio.run(srv.list_tools())}
-        schema = tools["cg_scaffold"].input_schema
+        schema = _input_schema(tools["cg_scaffold"])
         self.assertEqual(sorted(schema["properties"]),
                          ["inputs", "kind", "name", "outputs", "package", "verify"])
         self.assertTrue(tools["cg_check"].description.startswith("Parse, scope"))
