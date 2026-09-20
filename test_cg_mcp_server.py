@@ -185,6 +185,56 @@ def _input_schema(tool):
     raise AttributeError(f"no input-schema attribute on {type(tool).__name__}")
 
 
+class TestTheShimActuallyRunsTheServer(unittest.TestCase):
+    """`python -m <name>.cg_mcp_server` must START THE SERVER, under both names.
+
+    This is the invocation MCP host configs use, and it shipped broken: under
+    `-m`, runpy runs the shim file with `__name__ == "__main__"`, and importing
+    the real module does NOT fire its own `if __name__ == "__main__"` guard,
+    because at import time its `__name__` is the real dotted path. The shim
+    imported, rebound sys.modules, and fell off the end. No output, exit 0, and
+    two AccelOne turns ran with zero cg tools.
+
+    ⚠️ Why this class exists alongside the import test: that one checks
+    IMPORTABILITY and passes cleanly in exactly this broken state --
+    `import cg_agent_kit.cg_mcp_server` works fine when `-m` starts nothing.
+    Importability does not imply executability, and only running the entry point
+    tells them apart.
+    """
+
+    INIT = json.dumps({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {"protocolVersion": "2025-06-18", "capabilities": {},
+                   "clientInfo": {"name": "probe", "version": "1"}},
+    })
+
+    def _handshake(self, module, cwd):
+        env = dict(os.environ)
+        env.pop("PYTHONPATH", None)
+        env.setdefault("NEOSYN_CG_DEV", "1")
+        return subprocess.run(
+            [sys.executable, "-m", module],
+            input=self.INIT + "\n", cwd=cwd, env=env,
+            capture_output=True, text=True, timeout=120)
+
+    def test_both_module_paths_answer_an_initialize(self):
+        with tempfile.TemporaryDirectory() as neutral:
+            probe = subprocess.run(
+                [sys.executable, "-c", "import mcp, neosyn_fpga_mcp.cg_mcp_server"],
+                cwd=neutral, capture_output=True, text=True, timeout=120)
+            if probe.returncode != 0:
+                self.skipTest("package or `mcp` not installed in this interpreter")
+            for module in ("neosyn_fpga_mcp.cg_mcp_server",
+                           "cg_agent_kit.cg_mcp_server"):
+                r = self._handshake(module, neutral)
+                self.assertIn(
+                    '"result"', r.stdout,
+                    f"`python -m {module}` started no server -- it produced no "
+                    f"JSON-RPC result. Import working is NOT enough; the entry "
+                    f"point must run.\nstdout={r.stdout[:200]!r}\n"
+                    f"stderr={r.stderr.strip()[-300:]}")
+
+
 class TestBothPackageNamesResolveWhenInstalled(unittest.TestCase):
     """The rename's compatibility claim, CHECKED rather than asserted in a docstring.
 
