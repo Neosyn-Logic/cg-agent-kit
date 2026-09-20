@@ -1449,6 +1449,32 @@ class TestProbeDerivedHints(unittest.TestCase):
 
 
 
+@unittest.skipUnless(JAR_OK, "compiler jar not built")
+class TestEveryShippedExampleCompiles(unittest.TestCase):
+    """`cg_example`'s whole claim is that the shipped entries compile, and the
+    website states the count in its own words. So compile ALL of them, on
+    whatever jar is present -- COMPILING needs no simulator, so this must never
+    be skipped for want of one.
+
+    It exists because it was not there: `Lfsr.cg` used two file-scope `const`s,
+    which compile only on the commercial build. The open-source compiler -- the
+    one our docs say needs no licence, and the one CI runs -- answered
+    `missing EOF at 'const'`. 37 of 38, while we claimed 38, on the free path a
+    model is most likely to take. Fixed by moving them into a `bundle`, which
+    both compilers accept."""
+
+    def test_all_of_them(self):
+        files = sorted(cg._EXAMPLES_DIR.glob("*.cg"))
+        self.assertGreater(len(files), 20, "example corpus missing")
+        broken = []
+        for f in files:
+            r = cg.check(f.read_text())
+            if not r["ok"]:
+                broken.append((f.name, r["diagnostics"][:1]))
+        self.assertEqual(broken, [], f"{len(broken)} of {len(files)} shipped "
+                                     f"examples do not compile on this jar")
+
+
 class TestPushedExamplesAreValid(unittest.TestCase):
     """Anything we PUSH at a failing model is code it will copy. If a shape
     example does not compile, we are teaching the exact error we are trying to
@@ -1464,12 +1490,21 @@ class TestPushedExamplesAreValid(unittest.TestCase):
     def test_there_is_at_least_one(self):
         self.assertTrue(self._shape_examples(), "no shape examples wired")
 
-    @unittest.skipUnless(BYTECODE_OK, "VERIFIES by simulating; needs the bytecode simulator")
-    def test_every_shape_example_compiles_and_verifies(self):
+    def test_every_shape_example_compiles(self):
+        """COMPILING needs no simulator, so this runs on every jar. Split out of
+        the verify test below: skipping that one for want of the bytecode
+        simulator was also skipping this, and a pushed example that does not
+        PARSE is the worst case -- we would be teaching the error we are
+        correcting."""
         for pattern, src in self._shape_examples():
             with self.subTest(rule=pattern[:40]):
                 r = cg.check(src)
                 self.assertTrue(r["ok"], f"pushed example does not compile: {r}")
+
+    @unittest.skipUnless(BYTECODE_OK, "VERIFIES by simulating; needs the bytecode simulator")
+    def test_every_shape_example_verifies(self):
+        for pattern, src in self._shape_examples():
+            with self.subTest(rule=pattern[:40]):
                 sim = cg.simulate(src)
                 self.assertTrue(sim["verified"],
                                 f"pushed example verifies nothing: {sim.get('warning')}")
