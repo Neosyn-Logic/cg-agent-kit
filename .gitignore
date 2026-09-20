@@ -24,3 +24,8 @@ cg_agent_kit/examples/.accelone/
 
 # throwaway venv used to build/publish releases
 .venv-build/
+
+# the defensive shim's own build output
+packaging/cg-agent-kit-shim/build/
+packaging/cg-agent-kit-shim/dist/
+packaging/cg-agent-kit-shim/*.egg-info/

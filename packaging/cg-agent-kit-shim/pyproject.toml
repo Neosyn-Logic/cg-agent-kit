@@ -1,0 +1,42 @@
+# Defensive shim for the OLD name.
+#
+# `cg-agent-kit` was this project's name until 1.1.1. It was NEVER published to
+# PyPI -- the name is unregistered, while our published extension README and our
+# website pointed people at it. An unclaimed name that our own material tells
+# people to install is a supply-chain hole: whoever registers it can serve code
+# to agents that trust us.
+#
+# So this claims the name and does exactly one thing: depend on the real
+# package. It deliberately ships NO MODULES -- `neosyn-fpga-mcp` already
+# provides both `neosyn_fpga_mcp/` and a `cg_agent_kit/` alias, and two
+# distributions owning the same files means the last install wins and
+# uninstalling either breaks the other.
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cg-agent-kit"
+version = "1.1.2"
+description = "Renamed to neosyn-fpga-mcp. This package only installs it."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [{ name = "Neosyn" }]
+keywords = ["mcp", "model-context-protocol", "fpga", "hdl", "verilog", "eda", "rtl"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Electronic Design Automation (EDA)",
+    "Development Status :: 7 - Inactive",
+]
+dependencies = ["neosyn-fpga-mcp>=1.1.2"]
+
+[project.urls]
+Homepage = "https://neosyn.io"
+Repository = "https://github.com/Neosyn-Logic/cg-agent-kit"
+
+# No packages: installing this installs neosyn-fpga-mcp, which provides the
+# modules -- including the `cg_agent_kit` import alias.
+[tool.setuptools]
+packages = []
