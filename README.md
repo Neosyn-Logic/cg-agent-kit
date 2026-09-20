@@ -1,10 +1,21 @@
 # C⏚ Agent Kit
 
-> **Renamed.** This was `cg-agent-kit` up to 1.0.0. "cg" is our shorthand for C⏚
-> and meant nothing to anyone searching for an FPGA tool. `pip install cg-agent-kit`
-> still works — it is a shim that installs this package — and
-> `python -m cg_agent_kit.cg_mcp_server` still resolves, so existing MCP host
-> configs keep working. New installs should use `neosyn-fpga-mcp`.
+<!-- mcp-name: io.neosyn/neosyn-fpga-mcp -->
+
+> **Install `neosyn-fpga-mcp`.** This project was called `cg-agent-kit` up to
+> 1.0.0. "cg" is our shorthand for C⏚ and meant nothing to anyone searching for
+> an FPGA tool.
+>
+> **`pip install cg-agent-kit` does not work** — that name has never been
+> published to PyPI, so every instruction pointing at it, including our own,
+> returned `No matching distribution found`. We intend to claim it as a shim
+> that pulls in this package; until then, `neosyn-fpga-mcp` is the only name
+> that installs.
+>
+> Inside the package the old paths are intact:
+> `python -m cg_agent_kit.cg_mcp_server` and the `cg-mcp-server` command both
+> still resolve, so an existing MCP host config keeps working once this package
+> is installed.
 
 Make any LLM write **C⏚ (Cg)** instead of Verilog — **without retraining the
 model.** The kit has two parts that work together:
