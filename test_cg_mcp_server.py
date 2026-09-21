@@ -328,6 +328,37 @@ class TestBothPackageNamesResolveWhenInstalled(unittest.TestCase):
                          f"{probe.stderr.strip()[-300:]}")
 
 
+class TestAnUnmatchedSuggestionStillSaysSomething(unittest.TestCase):
+    """F103(b). An unmatched lookup returned a bare {"ok": false}. A model hit one
+    parse error four times, asked this tool, got that, and abandoned a genuine test
+    that was one brace pair from passing. Never a bare reply: say what is known and
+    where to look -- in `error`, the field every orchestrator shows the model."""
+
+    def test_unmatched_is_never_bare(self):
+        for m in ("missing '{' at 'v'", "some complaint no rule has ever seen", ""):
+            with self.subTest(m=m):
+                r = cg.suggest_for_error(m)
+                self.assertFalse(r["ok"])
+                self.assertTrue(r.get("error"), f"bare reply for {m!r}: {r}")
+
+    def test_a_parse_error_gets_the_parse_advice(self):
+        r = cg.suggest_for_error("mismatched input 'foo' expecting ';'")
+        if r["ok"]:
+            self.skipTest("a rule now matches this exact text; the generic path is not reached")
+        self.assertIn("PARSE error", r["error"])
+        self.assertIn("FIRST", r["error"])
+
+    def test_a_real_match_is_unaffected(self):
+        self.assertTrue(cg.suggest_for_error("right operand of '/'")["ok"])
+
+    def test_auto_attach_still_attaches_nothing_on_no_match(self):
+        """The internal auto-attach acts only on ok:true; an unmatched reply must not
+        start riding along on every failing check."""
+        r = cg._attach_suggestion({"ok": False, "diagnostics": [
+            {"file": "x.cg", "line": 1, "message": "some complaint no rule has ever seen"}]})
+        self.assertNotIn("suggestion", r)
+
+
 class TestLintNeverCertifiesWhatItCouldNotRead(unittest.TestCase):
     """F102. lint's `checked` was hard-wired True, so it returned a CLEAN result for a
     filename, the word "hello" and a nonexistent path -- it found nothing to object to

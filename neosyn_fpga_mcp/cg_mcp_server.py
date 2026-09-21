@@ -198,8 +198,10 @@ def _source_usage_error(source: str) -> str | None:
     looks_like_path = os.path.exists(s) or s.endswith(".cg") or "/" in s
     if looks_like_path or "package" not in s:
         shown = s if len(s) <= 120 else s[:117] + "..."
-        what = "a path" if looks_like_path else "not C⏚ source"
-        return (f"source looks like {what}: {shown!r}. `source` takes C⏚ TEXT, "
+        # Phrased per case: "looks like not C⏚ source" (the first version) is not English.
+        what = ("source looks like a path" if looks_like_path
+                else "source does not look like C⏚ source")
+        return (f"{what}: {shown!r}. `source` takes C⏚ TEXT, "
                 f"not a filename or an expression -- read the file yourself and "
                 f"pass its contents. For a multi-file project, pass package_dir "
                 f"(the package root) and give source the entry file's text.")
@@ -1463,7 +1465,9 @@ def suggest_for_error(message: str, is_first: bool = True) -> dict:
     appearing later is a symptom of an earlier fault, not its own bug. It
     defaults to True so a direct lookup of a single message behaves as asked."""
     if not message:
-        return {"ok": False}
+        return {"ok": False, "matched": False,
+                "error": "no message given -- pass the text of the compiler diagnostic "
+                         "you want explained."}
     for entry in _FAIL_HINTS:
         rx, name, hint = entry[:3]
         first_only = entry[3] if len(entry) > 3 else False
@@ -1483,7 +1487,43 @@ def suggest_for_error(message: str, is_first: bool = True) -> dict:
             elif len(entry) > 4 and entry[4]:
                 src = entry[4]
             return {"ok": True, "recipe": name, "hint": hint, "source": src}
-    return {"ok": False}
+    return _no_suggestion(message)
+
+
+# Parse errors share one piece of advice that is true whatever the token: the
+# parser met something it did not expect, and every LATER diagnostic is usually a
+# cascade from the first. Recognised by shape, not by a list of tokens.
+_PARSE_ERR = re.compile(r"mismatched input|missing '|missing EOF|no viable alternative"
+                        r"|extraneous input|expecting", re.I)
+
+
+def _no_suggestion(message: str) -> dict:
+    """F103(b). An unmatched lookup used to answer a bare {"ok": false}: no hint,
+    no "nothing matched", nothing to try. Measured in the AccelOne trial, a model hit
+    the same parse error four times, asked this tool, got that, and abandoned a
+    GENUINE overflow test that was one brace pair from passing. An orchestrator can
+    render the bare reply as "Tool failed (no detail returned)" -- honest, but it
+    still tells the model nothing to do next. So say what we know and where to look.
+
+    The sentence is in `error` on purpose: that is the one field every orchestrator
+    version shows the model, including ones that drop the rest of a failed reply.
+    `ok` stays False, so the internal auto-attach (`_attach_suggestion`), which only
+    acts on a match, attaches nothing -- this is for a model that ASKED."""
+    if _PARSE_ERR.search(message):
+        text = ("no recipe matches this message, but it is a PARSE error: the parser "
+                "met a token it did not expect. Fix the FIRST diagnostic only -- later "
+                "ones are usually a cascade from it -- and re-check. Common causes: a "
+                "missing brace around a loop or branch body, a C habit C\u23da does not "
+                "have (switch/case, ++ in an expression), or a declaration in the wrong "
+                "place. See cg_docs('context') for the syntax C\u23da accepts.")
+        topic = "context"
+    else:
+        text = ("no recipe matches this message. It is not a pattern this kit "
+                "recognises, so there is no canned fix -- read the message itself, fix "
+                "the FIRST diagnostic, and re-run cg_check. cg_docs('context') covers "
+                "the language; cg_example lists verified designs to adapt from.")
+        topic = "context"
+    return {"ok": False, "matched": False, "error": text, "see_docs": topic}
 
 
 
