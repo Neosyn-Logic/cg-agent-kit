@@ -328,6 +328,29 @@ class TestBothPackageNamesResolveWhenInstalled(unittest.TestCase):
                          f"{probe.stderr.strip()[-300:]}")
 
 
+class TestLintNeverCertifiesWhatItCouldNotRead(unittest.TestCase):
+    """F102. lint's `checked` was hard-wired True, so it returned a CLEAN result for a
+    filename, the word "hello" and a nonexistent path -- it found nothing to object to
+    because it found nothing at all. A model linted a path in the AccelOne trial and
+    got a clean bill of health in the same second cg_check rejected it."""
+
+    BAD = ("fpga/src/main/cg/IntakeSum.cg", "hello", "/does/not/exist.cg",
+           "this is not\nC-ground at all\njust text", "")
+
+    def test_nothing_readable_is_never_checked_or_ok(self):
+        for src in self.BAD:
+            with self.subTest(src=src[:30]):
+                r = cg.lint(src)
+                self.assertFalse(r["checked"], f"lint claimed to check {src!r}")
+                self.assertFalse(r["ok"], f"lint certified {src!r} as clean")
+                self.assertTrue(r.get("error"), "an unchecked result must say WHY")
+
+    def test_a_real_design_is_still_checked_and_names_what_it_checked(self):
+        r = cg.lint((cg._EXAMPLES_DIR / "Counter.cg").read_text())
+        self.assertTrue(r["checked"])
+        self.assertIn("Counter", r["entities_checked"])
+
+
 class TestSourceUsageGuard(unittest.TestCase):
     """`source` takes C⏚ TEXT. A path, or an expression that would read one,
     must be REJECTED rather than compiled as if it were source.
@@ -1941,8 +1964,13 @@ class TestLocalClientUnknownTool(unittest.TestCase):
         self.assertNotIn("cg_synth", " ".join(r["available_tools"]))
 
     def test_a_real_tool_still_dispatches(self):
+        # What this proves is that DISPATCH works, so it needs input the tool will
+        # accept. It used `task X {}` -- no `package` line, so not C\u23da, which
+        # cg_check has always refused; lint certified it only because lint used to
+        # certify anything (F102). Now it needs a real, if minimal, design.
         import cg_local_client as client
-        self.assertTrue(client.dispatch("cg_lint", {"source": "task X {}\n"})["ok"])
+        src = "package t;\ntask X { out sync u8 y; void loop() { y.write(1); } }\n"
+        self.assertTrue(client.dispatch("cg_lint", {"source": src})["ok"])
 
 
 class TestSystemPromptCoversEveryTool(unittest.TestCase):

@@ -2072,15 +2072,38 @@ def _lint_test_block(body: str, base: int):
 
 
 def lint(source: str) -> dict:
-    """Static checks for C(g) that compiles but is wrong. See _LINT_* above."""
+    """Static checks for C(g) that compiles but is wrong. See _LINT_* above.
+
+    F102. `checked` used to be hard-wired True, so lint CERTIFIED anything it could
+    not read: a filename, the word "hello", a path that does not exist -- each came
+    back {"ok": true, "checked": true, "findings": []}. It found nothing to object to
+    because it found nothing at all. That is the worst possible output for a tool
+    whose purpose is to be run "before you claim a design is verified": measured in
+    the AccelOne trial, a model linted a PATH and got a clean bill of health in the
+    same second that cg_check correctly rejected it.
+
+    So: the same `source`-takes-text guard as the compiling tools (lint never calls
+    `_run`, which is why the F87 guard did not reach it -- "a guard on one of four is
+    its own trap", and this was the fifth), and `checked` now means an entity was
+    actually examined.
+    """
+    usage = _source_usage_error(source)
+    if usage:
+        return {"ok": False, "checked": False, "findings": [], "error": usage}
     src = _lint_decomment(source or "")
+    entities = list(_lint_entities(src))
+    if not entities:
+        return {"ok": False, "checked": False, "findings": [],
+                "error": "no task, network or bundle was found in `source`, so NOTHING "
+                         "was linted -- this is not a clean result. Pass the C\u23da text "
+                         "of a design (the `package` line plus at least one entity)."}
     findings = []
 
     def add(rule, line, severity, message, fix):
         findings.append({"rule": rule, "line": line, "severity": severity,
                          "message": message, "fix": fix})
 
-    for kind, name, bstart, bend in _lint_entities(src):
+    for kind, name, bstart, bend in entities:
         body = src[bstart:bend]
         ports = _lint_ports(body, bstart)
         outs = {p for p, d in ports.items() if d["dir"] == "out"}
@@ -2138,7 +2161,8 @@ def lint(source: str) -> dict:
                     f"`!{bm.group(1)}` (and `^`/`!=` between two bools is fine).")
 
     return {"ok": not any(f["severity"] == "error" for f in findings),
-            "findings": findings, "checked": True}
+            "findings": findings, "checked": True,
+            "entities_checked": [n for _k, n, _s, _e in entities]}
 
 
 # --------------------------------------------------------- the tool roster
