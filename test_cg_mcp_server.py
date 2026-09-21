@@ -328,6 +328,33 @@ class TestBothPackageNamesResolveWhenInstalled(unittest.TestCase):
                          f"{probe.stderr.strip()[-300:]}")
 
 
+@unittest.skipUnless(JAR_OK, "compiler jar not built")
+class TestBracelessBodyGetsTheBraceRule(unittest.TestCase):
+    """F103(a). `for (...) v.write(x);` is a parse error the compiler reports as
+    "missing '{' at '<token>'" -- naming the wrong thing. A model hit it four times
+    and abandoned a real test. The rule must be PUSHED on the failing check, not
+    only available to a model that thinks to ask."""
+
+    BRACELESS = ("package com.example;\ntask T {\n    out sync u8 y;\n"
+                 "    void loop() {\n        u8 acc = 0;\n"
+                 "        for (u3 i = 1; i < 4; i++)\n"
+                 "            acc = (u8) (acc + i);\n"
+                 "        y.write(acc);\n    }\n}\n")
+
+    def test_the_failing_check_carries_the_brace_rule(self):
+        r = cg.check(self.BRACELESS)
+        self.assertFalse(r["ok"])
+        self.assertIn("suggestion", r, f"no hint pushed on the failing check: {r}")
+        self.assertIn("BRACES", r["suggestion"]["hint"])
+
+    def test_a_direct_lookup_matches_too(self):
+        self.assertTrue(cg.suggest_for_error("missing '{' at 'v'")["ok"])
+
+    def test_the_context_pack_states_the_rule(self):
+        self.assertIn("Braces around EVERY loop and branch body",
+                      (cg._HERE / "cg_context.md").read_text())
+
+
 class TestAnUnmatchedSuggestionStillSaysSomething(unittest.TestCase):
     """F103(b). An unmatched lookup returned a bare {"ok": false}. A model hit one
     parse error four times, asked this tool, got that, and abandoned a genuine test
@@ -335,7 +362,11 @@ class TestAnUnmatchedSuggestionStillSaysSomething(unittest.TestCase):
     where to look -- in `error`, the field every orchestrator shows the model."""
 
     def test_unmatched_is_never_bare(self):
-        for m in ("missing '{' at 'v'", "some complaint no rule has ever seen", ""):
+        # Chosen to be UNMATCHED. It used "missing '{' at 'v'" -- until F103(a) gave
+        # that message a rule of its own, which is exactly the kind of drift that
+        # makes a fixture assert the opposite of what it was written to test.
+        for m in ("extraneous input 'qqq' expecting ';'",
+                  "some complaint no rule has ever seen", ""):
             with self.subTest(m=m):
                 r = cg.suggest_for_error(m)
                 self.assertFalse(r["ok"])

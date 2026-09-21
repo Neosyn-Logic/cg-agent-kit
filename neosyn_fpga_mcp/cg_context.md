@@ -493,6 +493,11 @@ the sim log. A passing `cg_simulate` (ok: true) means the asserts held.
     works correctly (the handshake paces it, on both hardware and Fast-sim). Even
     so, the simplest always-correct reduction reads every stream every cycle and
     uses the value conditionally — seed `cg_example("reduction")` (`StreamDot`).
+14. **Braces around EVERY loop and branch body, even one statement.**
+    `for (i = 0; i < N; i++) v.write(x);` is a parse error — write
+    `for (i = 0; i < N; i++) { v.write(x); }`; same for `if`, `else`, `while`. The
+    compiler reports it as `missing '{' at '<token>'`, naming the body's first
+    statement rather than the missing brace before it.
 
 ---
 

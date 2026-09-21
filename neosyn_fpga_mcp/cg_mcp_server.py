@@ -1371,6 +1371,21 @@ _FAIL_HINTS = [
      "index must be a literal or a `const`, never a runtime variable; to select "
      "at runtime, write the branches out (`if (i == 0) y[0].write(v); else ...`). "
      "Test vectors name the elements individually (`y_0: [...]`, `y_1: [...]`)."),
+    # F103(a). A braceless loop or branch body: `for (...) v.write(x);`. C⏚ requires
+    # braces around EVERY body, and the parser says so only as "missing '{' at '<the
+    # next token>'" -- which names the wrong thing. Measured in the AccelOne trial: a
+    # model hit it four times in 16 minutes, asked for a suggestion and got nothing
+    # (F103(b)), and abandoned a genuine overflow test one brace pair from passing.
+    # FIRST diagnostic only: later down a file the same text is usually cascade.
+    (re.compile(r"missing '\{' at", re.I),
+     None,
+     "C\u23da requires BRACES around every loop and branch body, even a single "
+     "statement. `for (i = 0; i < N; i++) v.write(x);` is a parse error -- write "
+     "`for (i = 0; i < N; i++) { v.write(x); }`. The same holds for `if`, `else` and "
+     "`while`. The token the message names is the first statement of the body, not "
+     "the fault: the fault is the missing `{` just before it.",
+     True,
+     'package com.example;\ntask SumBraced {\n    properties { test: { y: [6] } }\n    out sync u8 y;\n    void loop() {\n        u8 acc = 0;\n        for (u3 i = 1; i < 4; i++) {   // braces REQUIRED, even around one statement\n            acc = (u8) (acc + i);\n        }\n        y.write(acc);\n    }\n}\n'),
     (re.compile(r"missing '\}' at 'case'|no viable alternative at input 'case'|"
                 r"\bswitch cannot be resolved", re.I),
      None,
