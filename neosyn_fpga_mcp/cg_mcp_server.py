@@ -1120,12 +1120,45 @@ _DOCS = {
 }
 
 
-def docs(topic: str = "") -> dict:
-    """Serve a named markdown knowledge doc. Empty topic -> the index of
-    available topics + descriptions; a topic -> its full markdown content."""
+def _doc_sections(text: str) -> list:
+    """Split a knowledge doc on its `## ` headings, in order. The text before the
+    first one is the "intro". Each section keeps its own `###` subsections."""
+    parts = re.split(r"(?m)^(?=## )", text)
+    out = []
+    for part in parts:
+        if not part.strip():
+            continue
+        first = part.splitlines()[0]
+        name = first[3:].strip() if first.startswith("## ") else "intro"
+        out.append((name, part))
+    return out
+
+
+def docs(topic: str = "", section: str = "") -> dict:
+    """Serve a named markdown knowledge doc. Empty topic -> the index of topics;
+    a topic -> its full content; a topic AND a section -> just that `## ` section.
+
+    F88. `context` is ~24,000 characters -- about a quarter of a small model's
+    working budget -- and could only be fetched whole. Measured in the AccelOne
+    trial: after each compaction the model lost it and fetched ALL of it again,
+    three times in one 49-minute turn (13 compactions). Sections run 500-3,900
+    characters, so re-reading the one part it needs costs 6-50x less.
+
+    The whole-document default is kept on purpose: the tool's own description
+    tells a model to load `context` before writing any C\u23da, and a first read
+    of the whole language pack is right. What was wasted was the RE-reads -- so
+    every full fetch now also returns `sections`, and a model that has read it
+    once knows it can come back for one part."""
     if not topic:
-        return {"ok": True,
-                "topics": [{"topic": k, "description": d} for k, (_, d) in _DOCS.items()]}
+        index = []
+        for k, (path, d) in _DOCS.items():
+            item = {"topic": k, "description": d}
+            try:
+                item["sections"] = [n for n, _ in _doc_sections(path.read_text(errors="replace"))]
+            except OSError:
+                pass
+            index.append(item)
+        return {"ok": True, "topics": index}
     entry = _DOCS.get(topic.strip().lower())
     if entry is None:
         return _with_roster({"ok": False,
@@ -1133,10 +1166,29 @@ def docs(topic: str = "") -> dict:
                              "topics": list(_DOCS.keys())})
     path, desc = entry
     try:
-        return {"ok": True, "topic": topic, "description": desc,
-                "content": path.read_text(errors="replace")}
+        text = path.read_text(errors="replace")
     except OSError as e:
         return {"ok": False, "error": str(e)}
+    sections = _doc_sections(text)
+    names = [n for n, _ in sections]
+    if not section:
+        return {"ok": True, "topic": topic, "description": desc, "content": text,
+                "sections": names,
+                "note": "re-read ONE part later with cg_docs(topic, section=<name>) "
+                        "instead of fetching this whole document again"}
+    want = section.strip().lower()
+    exact = [(n, b) for n, b in sections if n.lower() == want]
+    partial = [(n, b) for n, b in sections if want in n.lower()]
+    hits = exact or partial
+    if len(hits) != 1:
+        why = "no section matches" if not hits else "more than one section matches"
+        return {"ok": False, "topic": topic,
+                "error": f"{why} {section!r} in {topic!r}; pick one of the names in "
+                         f"`sections`.",
+                "sections": names}
+    name, body = hits[0]
+    return {"ok": True, "topic": topic, "section": name, "content": body,
+            "sections": names}
 
 
 # ------------------------------------------------ validated-code dictionary
@@ -2774,9 +2826,13 @@ def cg_graph(source: str, network: str | None = None,
     return graph(source, network, extra_files)
 
 @_tool("fetch a knowledge pack: context, handshakes, arithmetic, fsm, riscv.")
-def cg_docs(topic: str = "") -> dict:
+def cg_docs(topic: str = "", section: str = "") -> dict:
     """Fetch a markdown knowledge doc. No topic → an index of available
-    topics with descriptions; a topic → its full content. Topics:
+    topics, their descriptions and their SECTIONS; a topic → its full content
+    plus its section names; a topic and a `section` → just that section.
+    Re-reading one section is far cheaper than the whole doc -- after your
+    context is compacted, fetch the section you need, not the whole topic.
+    Topics:
     'context' (the core C⏚ language pack — load before writing any Cg);
     'handshakes' (port protocols push/stream/confirm, back-pressure, and the
     pacing gotcha when feeding a registered built-in — read before wiring a
@@ -2788,7 +2844,7 @@ def cg_docs(topic: str = "") -> dict:
     count-prefixed boot-stream program loading, and the lossless-capture /
     address-filtered testbench patterns — read when building or extending a
     processor, instruction decoder, datapath, or stack machine)."""
-    return docs(topic)
+    return docs(topic, section)
 
 
 def build_server():

@@ -329,6 +329,38 @@ class TestBothPackageNamesResolveWhenInstalled(unittest.TestCase):
 
 
 @unittest.skipUnless(JAR_OK, "compiler jar not built")
+class TestDocsCanBeReadOneSectionAtATime(unittest.TestCase):
+    """F88. `context` (~24,000 chars) could only be fetched whole; after each
+    compaction a trial model re-fetched ALL of it, three times in one turn. A
+    section must be addressable, and a full fetch must SAY that it is."""
+
+    def test_the_full_fetch_is_unchanged_but_lists_its_sections(self):
+        r = cg.docs("context")
+        self.assertTrue(r["ok"])
+        self.assertGreater(len(r["content"]), 10000, "the whole-document default is kept")
+        self.assertIn("Types", r["sections"])
+
+    def test_one_section_is_much_smaller_than_the_whole(self):
+        whole = len(cg.docs("context")["content"])
+        r = cg.docs("context", "types")
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["section"], "Types")
+        self.assertLess(len(r["content"]) * 4, whole, "a section should be a small slice")
+
+    def test_a_bad_name_returns_the_names_to_pick_from(self):
+        for q in ("nonsense", "a"):           # none, and ambiguous
+            with self.subTest(q=q):
+                r = cg.docs("context", q)
+                self.assertFalse(r["ok"])
+                self.assertTrue(r["error"])
+                self.assertIn("Types", r["sections"])
+
+    def test_the_index_lists_sections_for_every_topic(self):
+        for t in cg.docs()["topics"]:
+            with self.subTest(topic=t["topic"]):
+                self.assertTrue(t.get("sections"), f"{t['topic']} lists no sections")
+
+
 class TestBracelessBodyGetsTheBraceRule(unittest.TestCase):
     """F103(a). `for (...) v.write(x);` is a parse error the compiler reports as
     "missing '{' at '<token>'" -- naming the wrong thing. A model hit it four times
