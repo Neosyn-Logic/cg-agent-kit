@@ -1444,6 +1444,53 @@ class TestSimFindings(unittest.TestCase):
         self.assertEqual(len(diags), 1)
         self.assertIn("expected -21", diags[0]["message"])
 
+    # Real compiler output (2026-09-24), not hand-written: a monitor's failed
+    # assert used to reach the model as a Java stack trace with diagnostics: [].
+    MONITOR_FAIL = (
+        "Simulation started\n"
+        "intake_sum(frame 640x512 @ 65535) = 0x4fffb0000\n"
+        "Assertion failed: monitor_assert_no_diagnostic.cg:42 in TestIntakeSumFull_monitor: "
+        "v == signed(resize(0x3fffb0000, 64)) -- v = 21474508800 (0x4fffb0000), "
+        "signed(resize(0x3fffb0000, 64)) = 17179541504 (0x3fffb0000) [cycle 327679]\n")
+    VECTOR_FAIL = (
+        "Simulation started\n"
+        "port sum [vector 0] expected 204880 -> 0x32140\n"
+        "Assertion failed: vector_test_good_diagnostic.cg in TestIntakeSum_expected: "
+        "sum == signed(resize(204880, 64)) -- sum = 205120 (0x32140), "
+        "signed(resize(204880, 64)) = 204880 (0x32050) [cycle 640]\n")
+
+    def test_monitor_assert_is_a_diagnostic(self):
+        diags, _ = cg._sim_findings(self.MONITOR_FAIL)
+        self.assertEqual(len(diags), 1, diags)
+        d = diags[0]
+        self.assertEqual((d["file"], d["line"]), ("monitor_assert_no_diagnostic.cg", 42))
+        self.assertIn("TestIntakeSumFull_monitor", d["message"])
+        self.assertIn("v = 21474508800 (0x4fffb0000)", d["message"])
+        self.assertIn("17179541504 (0x3fffb0000)", d["message"])
+
+    def test_vector_failure_is_reported_once_in_both_radixes(self):
+        # The vector checker's own assert fires too; the `port ... [vector i]` line
+        # says more, so exactly ONE diagnostic, and it names both values in both
+        # radixes rather than decimal against hex.
+        diags, _ = cg._sim_findings(self.VECTOR_FAIL)
+        self.assertEqual(len(diags), 1, diags)
+        self.assertEqual(diags[0]["message"], "test failure: port sum vector 0 "
+                         "expected 204880 (0x32050) but got 205120 (0x32140)")
+
+    def test_older_compiler_assert_is_still_a_diagnostic(self):
+        out = ("Simulation started\n"
+               "Exception in thread \"main\" java.lang.AssertionError: v == resize(5, 8)\n"
+               "\tat t.P_test_m.FSM_P_test_m_a(Unknown Source)\n")
+        diags, _ = cg._sim_findings(out)
+        self.assertEqual(len(diags), 1, diags)
+        self.assertIn("v == resize(5, 8)", diags[0]["message"])
+
+    def test_a_passing_run_has_no_assert_diagnostic(self):
+        # The control: nothing in a clean run looks like a failure.
+        out = ("Simulation started\nport y [vector 0] expected 1 -> 0x1\n"
+               "End of simulation\nChecks executed: 1\n")
+        self.assertEqual(cg._sim_findings(out)[0], [])
+
     def test_unchecked_ports_are_extracted(self):
         out = 'Simulation completed successfully.\n[neosyn] warning: missing test values for port "y"'
         diags, unchecked = cg._sim_findings(out)

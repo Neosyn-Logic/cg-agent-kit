@@ -390,6 +390,13 @@ def capabilities() -> dict:
 _MISMATCH_RE = re.compile(
     r'^port\s+(\S+)\s+\[vector\s+(\d+)\]\s+expected\s+(\S+)\s*->\s*(\S+)', re.M)
 _MISSING_VALS_RE = re.compile(r'missing test values for port "([^"]+)"')
+# A failed `assert` (compiler after 2026-09-24): one line naming where and by how much --
+#   Assertion failed: T.cg:42 in T_monitor: v == 5 -- v = 7 (0x7), 5 = 5 (0x5) [cycle 12]
+# The file and line are absent for a check the compiler synthesised (a `test:` vector).
+_ASSERT_RE = re.compile(
+    r'^Assertion failed: (?:(\S+?\.cg)(?::(\d+))? )?in (\S+): (.*?)(?: \[cycle (\d+)\])?\s*$', re.M)
+# The same failure from an older compiler: the bare expression under a Java stack trace.
+_LEGACY_ASSERT_RE = re.compile(r'java\.lang\.AssertionError: (.*)$', re.M)
 _CHECKS_RE = re.compile(r"^Checks executed:\s*(\d+)", re.M)
 
 
@@ -450,11 +457,46 @@ def _sim_findings(out: str) -> tuple:
         same = (e == g) if (e is not None and g is not None) else (exp == got)
         if same:
             continue
+        # Both values in BOTH radixes: the simulator prints the expectation as the
+        # source wrote it (decimal) and the actual in hex, and a reader should not
+        # have to convert to see how far off it is (kit feedback, 2026-09-24).
+        if e is not None and g is not None and not _is_bool(exp) and not _is_bool(got):
+            hx = re.fullmatch(r"0[xX]([0-9a-fA-F]+)", (got or "").strip())
+            width = 4 * len(hx.group(1)) if hx else None
+            exp, got = _both_radixes(e, width), _both_radixes(g, width)
         diags.append({"file": None, "line": None,
                       "message": f"test failure: port {port} vector {idx} "
                                  f"expected {exp} but got {got}"})
+    vector_failed = bool(diags)
+    for m in _ASSERT_RE.finditer(out or ""):
+        file, line, task, what, cycle = m.groups()
+        # A vector check is also an assert; its `port ... [vector i]` line above
+        # already says more (which vector), so its synthesised assert adds nothing.
+        if vector_failed and not line:
+            continue
+        diags.append({"file": file, "line": int(line) if line else None,
+                      "message": f"assertion failed in {task}: {what}"
+                                 + (f" (cycle {cycle})" if cycle else "")})
+    if not diags:
+        for m in _LEGACY_ASSERT_RE.finditer(out or ""):
+            diags.append({"file": None, "line": None,
+                          "message": f"assertion failed: {m.group(1).strip()} (this "
+                                     "compiler does not report the line or the values; "
+                                     "print() the operands before the assert to see them)"})
     unchecked = _MISSING_VALS_RE.findall(out or "")
     return diags, unchecked
+
+
+def _is_bool(v: str) -> bool:
+    return (v or "").strip().lower() in ("true", "false")
+
+
+def _both_radixes(n: int, width) -> str:
+    """`204880 (0x32050)`; a negative value shows its two's-complement bits at the
+    width the simulator printed, and only its decimal when that width is unknown."""
+    if n >= 0:
+        return f"{n} (0x{n:x})"
+    return f"{n} (0x{n & ((1 << width) - 1):x})" if width else str(n)
 
 
 def simulate(source: str, extra_files: dict | None = None, timeout: int = 60,
