@@ -6,11 +6,9 @@
 > 1.0.0. "cg" is our shorthand for C⏚ and meant nothing to anyone searching for
 > an FPGA tool.
 >
-> **`pip install cg-agent-kit` does not work** — that name has never been
-> published to PyPI, so every instruction pointing at it, including our own,
-> returned `No matching distribution found`. We intend to claim it as a shim
-> that pulls in this package; until then, `neosyn-fpga-mcp` is the only name
-> that installs.
+> **`pip install cg-agent-kit` still works:** on PyPI that name is now a shim
+> that installs `neosyn-fpga-mcp` and nothing else, so old instructions keep
+> working. New installs should use `neosyn-fpga-mcp` directly.
 >
 > Inside the package the old paths are intact:
 > `python -m cg_agent_kit.cg_mcp_server` and the `cg-mcp-server` command both
