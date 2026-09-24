@@ -129,6 +129,12 @@ dut = new task {
 This is the `StreamDot` recipe (bytecode-sim verified; synthesizes REAL). `cnt` and `acc`
 are state; the accumulator is flushed and cleared on the last element of each group.
 
+**On the last element of a group, fold AND emit in the same cycle:** add the element to
+`acc` first, then write `acc`. Writing the total and folding the last element afterwards
+(`if (last) { oy.write(acc); acc = 0; } acc = acc + x;`) emits every group short by its last
+element — and the lost element leaks into the next group, so a one-group test can pass while
+a long one fails.
+
 > **Signed inline `a*b` of stream inputs** works on the current toolchain — the Verilog
 > backend distributes the sign-extension over the handshake mux, so a signed MAC reduction
 > elaborates and synthesizes. (On releases ≤ 2.9.0 it emitted invalid Verilog; there, keep
@@ -168,5 +174,11 @@ carry it as a `const`/parameter rather than a stream.
   being read conditionally (once per group) — `push` has no back-pressure, so the skipped
   values are lost. Make it a `stream` (its handshake paces the conditional read), or read
   every cycle and use the value conditionally. See the reduction section above.
+- **A group total is short by exactly its last element:** the emit runs before the fold.
+  Fold first, then write (see "fold AND emit in the same cycle" above).
+- **A check fails but the design looks right:** recompute the EXPECTED value before changing
+  the design (`sum(1..N) = N*(N+1)/2`; a frame of `W*H` pixels of value `v` sums to `W*H*v`).
+  A failed assert prints both sides in decimal and hex — compare the design's value with the
+  arithmetic, not with the constant in the test. Hand-computed expectations are wrong often.
 - **A `push` output is intermittently lost:** the consumer wasn't ready; it needs a
   `stream` port or a FIFO, not `push`.

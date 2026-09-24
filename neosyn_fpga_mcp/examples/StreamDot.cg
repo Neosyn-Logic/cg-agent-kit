@@ -34,6 +34,8 @@ network StreamDot {
         uint<32> cnt = 0;
         uint<64> acc = 0;
         void loop() {
+            // Fold FIRST, then emit: on the last element of a group both happen in this
+            // cycle. Writing acc before adding the element emits a total short by it.
             acc = acc + ia.read() * ib.read();   // both streams read every cycle
             if (cnt == 3) {
                 oy.write(acc);
