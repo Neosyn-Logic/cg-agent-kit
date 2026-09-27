@@ -361,6 +361,63 @@ class TestDocsCanBeReadOneSectionAtATime(unittest.TestCase):
                 self.assertTrue(t.get("sections"), f"{t['topic']} lists no sections")
 
 
+class TestNoLicenceBypass(unittest.TestCase):
+    """2026-09-27. The kit defaulted NEOSYN_CG_DEV to "1" -- the commercial jar's internal
+    licence bypass -- so the free extension's jar plus this package ran the paid simulator
+    unlicensed, from the 0.x line on. Nothing asserted its ABSENCE, which is how it survived.
+    And without it the jar refuses with exit 78 and a `License:` line that _NOISE strips, so a
+    bare flip would leave every tool failing with no reason. Both halves are pinned here."""
+
+    # The jar's real refusal, captured from vscode-cg 3.3.0 with no licence (the `?` is the em
+    # dash printed without UTF-8, exactly as it arrives).
+    REFUSAL = ("[CgLanguageServer] License: FILE_MISSING ? No license file found at /nonexistent. "
+               "Set NEOSYN_CG_LICENSE or place the license at the default path. Contact your "
+               "Neosyn account manager to obtain one.\n")
+    SRC = "package t;\ntask T {\n  in stream u8 a;\n  out stream u8 b;\n  void loop() { b.write(a.read()); }\n}\n"
+
+    def _import_env(self, extra):
+        env = {k: v for k, v in os.environ.items() if k != "NEOSYN_CG_DEV"}
+        env.update(extra)
+        env["PYTHONPATH"] = str(pathlib.Path(__file__).resolve().parent)
+        return subprocess.run([sys.executable, "-c",
+                               "from neosyn_fpga_mcp import cg_mcp_server as cg;"
+                               "print(repr(cg.ENV.get('NEOSYN_CG_DEV')))"],
+                              env=env, capture_output=True, text=True, timeout=120).stdout.strip()
+
+    def test_the_bypass_is_never_injected(self):
+        self.assertEqual(self._import_env({}), "None",
+                         "the kit must not set NEOSYN_CG_DEV when the operator did not")
+
+    def test_an_operator_setting_is_passed_through(self):
+        self.assertEqual(self._import_env({"NEOSYN_CG_DEV": "1"}), "'1'")
+
+    def _refused(self, *a, **k):
+        return subprocess.CompletedProcess(a[0], 78, stdout="", stderr=self.REFUSAL)
+
+    def _with_refusing_jar(self, fn):
+        from unittest import mock
+        with tempfile.NamedTemporaryFile(suffix=".jar") as fake, \
+                mock.patch.object(cg, "JAR", pathlib.Path(fake.name)), \
+                mock.patch.object(cg.subprocess, "run", side_effect=self._refused):
+            return fn()
+
+    def test_a_licence_refusal_is_a_diagnostic_not_silence(self):
+        r = self._with_refusing_jar(lambda: cg.check(self.SRC))
+        self.assertFalse(r["ok"])
+        msgs = " | ".join(d["message"] for d in r["diagnostics"])
+        self.assertIn("no valid licence (FILE_MISSING", msgs, r)
+        self.assertIn("NEOSYN_CG_LICENSE", msgs)
+        self.assertIn("open-source compiler", msgs)
+
+    def test_the_probe_says_unlicensed(self):
+        r = self._with_refusing_jar(lambda: cg.probe_bytecode(force=True))
+        self.assertEqual(r["reason"], "unlicensed", r)
+        self.assertIn("FILE_MISSING", r["detail"])
+
+    def tearDown(self):
+        cg._BYTECODE_PROBE = None   # never leave the faked probe cached for other tests
+
+
 class TestBracelessBodyGetsTheBraceRule(unittest.TestCase):
     """F103(a). `for (...) v.write(x);` is a parse error the compiler reports as
     "missing '{' at '<token>'" -- naming the wrong thing. A model hit it four times

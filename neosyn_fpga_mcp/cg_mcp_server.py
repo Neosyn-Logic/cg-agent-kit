@@ -30,8 +30,8 @@ does not exist -- is checked against the registry by the test suite. Four
 hand-kept lists of the same thing is how a model ends up being told about a tool
 that isn't there.
 
-The jar is found via $CG_JAR or the default build path. A dev license is
-assumed via $NEOSYN_CG_DEV=1 (set by default here).
+The jar is found via $CG_JAR or the default build path. A commercial jar needs a
+licence ($NEOSYN_CG_LICENSE, or the default path); the open-source jar needs none.
 
 The core functions (check/simulate/generate/fsm/graph) have no MCP
 dependency, so they can be unit-tested directly:
@@ -56,7 +56,29 @@ JAR = Path(os.environ.get(
     "CG_JAR",
     str(Path.home() / "neosyn/neosyn-studio/releng/lsp-server/target/cg-language-server.jar"),
 ))
-ENV = {**os.environ, "NEOSYN_CG_DEV": os.environ.get("NEOSYN_CG_DEV", "1")}
+# The environment is passed through AS IS. This used to default NEOSYN_CG_DEV to "1" -- the
+# commercial jar's internal licence bypass -- so anyone with the free extension's jar and this
+# package ran the paid simulator unlicensed (2026-09-27). The open-source jar has no licence check,
+# so no free user needs it. Never inject it again; test_cg_mcp_server pins that.
+ENV = dict(os.environ)
+
+# The commercial jar refuses to run without a valid licence: exit 78 and one line
+#   [CgLanguageServer] License: FILE_MISSING — No license file found at ...
+# That line matches _NOISE and would be filtered out, leaving every tool failing with no reason,
+# so it is turned into a [cg-kit] line, which _diagnostics reports.
+_LICENCE_RE = re.compile(r"License:\s*([A-Z_]{4,})\W+(.*)$", re.M)
+
+
+def _licence_refusal(rc: int, out: str):
+    """The licence refusal in a jar run, as one actionable sentence, or None."""
+    m = _LICENCE_RE.search(out or "")
+    if not m and rc != 78:
+        return None
+    reason, detail = (m.group(1), m.group(2).strip().rstrip(".")) if m else ("REFUSED", f"exit {rc}")
+    where = "" if "NEOSYN_CG_LICENSE" in detail else " Set NEOSYN_CG_LICENSE to your licence file."
+    return (f"The Neosyn compiler at {JAR} refused to run: no valid licence ({reason}: "
+            f"{detail}).{where} Or use the open-source compiler, which needs no licence "
+            f"(it has no `simulate`).")
 
 # Compiler diagnostics look like:  [neosyn] Foo.cg:12: mismatched input ...
 _DIAG = re.compile(r"^\[neosyn\]\s+([^:]*\.cg):(\d+):\s*(.*)$", re.M)
@@ -233,7 +255,11 @@ def _run(subcmd: str, source: str, flags: list | None = None,
         try:
             p = subprocess.run(cmd, env=ENV, timeout=timeout,
                                capture_output=True, text=True, errors="replace")
-            return p.returncode, (p.stdout or "") + (p.stderr or ""), False, src.name
+            out = (p.stdout or "") + (p.stderr or "")
+            refusal = _licence_refusal(p.returncode, out)
+            if refusal:
+                out += f"\n[cg-kit] {refusal}\n"
+            return p.returncode, out, False, src.name
         except subprocess.TimeoutExpired as e:
             so = e.stdout or ""
             se = e.stderr or ""
@@ -321,6 +347,7 @@ def probe_bytecode(force: bool = False, timeout: int = 60) -> dict:
       ok            -- it ran and self-checked
       jar-missing   -- no compiler jar at $CG_JAR / the default path
       not-in-jar    -- this compiler has no `simulate` verb (open-source build)
+      unlicensed    -- a commercial jar that refused to run without a valid licence
       failed        -- present but did not complete; `detail` has the evidence
     """
     global _BYTECODE_PROBE
@@ -335,7 +362,10 @@ def probe_bytecode(force: bool = False, timeout: int = 60) -> dict:
         except Exception as e:                                  # pragma: no cover
             rc, out, to = 1, f"probe failed to run: {e}", False
         low = out.lower()
-        if "unknown command" in low:
+        refusal = _licence_refusal(rc, out)
+        if refusal:
+            res = {"available": False, "reason": "unlicensed", "detail": refusal}
+        elif "unknown command" in low:
             res = {"available": False, "reason": "not-in-jar",
                    "detail": "this compiler has no `simulate` verb -- the fast "
                              "bytecode simulator is part of the commercial "
@@ -1471,7 +1501,8 @@ _FAIL_HINTS = [
     # model hit it four times in 16 minutes, asked for a suggestion and got nothing
     # (F103(b)), and abandoned a genuine overflow test one brace pair from passing.
     # FIRST diagnostic only: later down a file the same text is usually cascade.
-    (re.compile(r"missing '\{' at", re.I),
+    # The compiler states it itself from 3.3.0 ("a body needs braces"); both wordings match.
+    (re.compile(r"missing '\{' at|a body needs braces", re.I),
      None,
      "C\u23da requires BRACES around every loop and branch body, even a single "
      "statement. `for (i = 0; i < N; i++) v.write(x);` is a parse error -- write "
