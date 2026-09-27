@@ -1,43 +1,101 @@
-# C⏚ Agent Kit
+# neosyn-fpga-mcp
 
 <!-- mcp-name: io.neosyn/neosyn-fpga-mcp -->
 
-> **Install `neosyn-fpga-mcp`.** This project was called `cg-agent-kit` up to
-> 1.0.0. "cg" is our shorthand for C⏚ and meant nothing to anyone searching for
-> an FPGA tool.
->
-> **`pip install cg-agent-kit` still works:** on PyPI that name is now a shim
-> that installs `neosyn-fpga-mcp` and nothing else, so old instructions keep
-> working. New installs should use `neosyn-fpga-mcp` directly.
->
-> Inside the package the old paths are intact:
-> `python -m cg_agent_kit.cg_mcp_server` and the `cg-mcp-server` command both
-> still resolve, so an existing MCP host config keeps working once this package
-> is installed.
+**An MCP server that hands the C⏚ FPGA toolchain to an AI agent.** The model
+writes hardware; the server compiles, simulates and synthesis-checks it against
+the real compiler, and hands back structured diagnostics the model can act on.
 
-Make any LLM write **C⏚ (Cg)** instead of Verilog — **without retraining the
-model.** The kit has two parts that work together:
+That is the difference worth caring about. An LLM asked for Verilog will
+confidently emit something that does not build, does not synthesize, or silently
+folds away to nothing. Here every step is judged by the same compiler a human
+uses.
 
-1. **`cg_context.md`** — a paste-anywhere knowledge pack. Load it as the
-   model's system prompt and it can write plausible C⏚: the mental model,
-   types, ports, structs/enums/generics, the standard library, and the
-   gotchas that otherwise sink first drafts.
-2. **`cg_mcp_server.py`** — the Neosyn compiler exposed as MCP tools. The model
-   *checks, simulates, and generates Verilog* against the real compiler and
-   self-corrects. This is what makes the output actually correct despite the
-   model having almost no C⏚ in its training data.
+Two parts work together:
 
-Knowledge gives a good first draft; the compiler-in-the-loop makes it right.
-Both are model-agnostic — any MCP-capable host (Claude Desktop/Code, Cursor,
-Cline, …) works, and the context pack works with any LLM at all.
+1. **`cg_context.md`** — a knowledge pack. Load it as the system prompt and the
+   model can write plausible C⏚: the mental model, types, ports,
+   structs/enums/generics, the standard library, and the gotchas that sink first
+   drafts.
+2. **the MCP server** — the compiler as tools, so the model verifies its own
+   output instead of recalling it.
 
-## Why this instead of fine-tuning
+Knowledge gives a good first draft; the compiler in the loop makes it right.
+Both are model-agnostic — any stdio-MCP host (Claude Desktop, Claude Code,
+Cursor, Cline) works, and the context pack works with any LLM at all.
 
-C⏚ is a niche language with little public code, and it gains features every
-release. A fine-tuned model is expensive and goes stale. In-context knowledge
-plus a verification loop costs nothing to retrain, tracks the language as the
-compiler evolves, and converges on correct code by *running* it rather than
-recalling it.
+**Why not fine-tune?** C⏚ is a niche language with little public code, and it
+gains features every release. A fine-tuned model is expensive and goes stale.
+In-context knowledge plus a verification loop costs nothing to retrain, tracks
+the language as the compiler evolves, and converges by *running* code rather
+than recalling it.
+
+## Install
+
+```bash
+pip install neosyn-fpga-mcp
+```
+
+Then point it at a C⏚ compiler jar:
+
+```bash
+export CG_JAR=/path/to/cg-language-server.jar
+```
+
+Two ways to get that jar:
+
+- **Open source** — a prebuilt jar from
+  [cg-compiler releases](https://github.com/Neosyn-Logic/cg-compiler/releases/latest),
+  or build it from source.
+- **Commercial** — the jar inside an installed
+  [Neosyn C⏚ extension](https://neosyn.io/download), which adds the fast
+  bytecode simulator and VHDL output.
+
+`cg_capabilities` reports which one you have and what it can do, probed rather
+than assumed.
+
+## Requirements
+
+- **Python 3.10+**
+- **Java 17 or newer** on `PATH` — the jar's bytecode targets 17.
+- **Optional:** `yosys` on `PATH` for `cg_synth` (override with `$YOSYS`);
+  `iverilog` for `cg_simulate(simulator='iverilog')`. Neither is needed for
+  `cg_check`, `cg_generate_verilog`, or the bytecode simulator.
+
+Smoke-test the verification core without an MCP client:
+
+```bash
+python3 - <<'EOF'
+from neosyn_fpga_mcp import cg_mcp_server as cg
+print(cg.simulate("package d;\ntask T { properties { test: { v:[1,2,3] } }\n"
+                  "  out push u8 v; u8 c; void setup(){c=0;}\n"
+                  "  void loop(){c=c+1; v.write(c);} }"))
+EOF
+```
+
+## Connect it to an MCP host
+
+Add a server entry. Use absolute paths.
+
+```json
+{
+  "mcpServers": {
+    "cg": {
+      "command": "neosyn-fpga-mcp",
+      "args": [],
+      "env": {
+        "CG_JAR": "/abs/path/to/cg-language-server.jar"
+      }
+    }
+  }
+}
+```
+
+The same `command`/`args`/`env` shape works for Claude Desktop, Claude Code,
+Cursor, Cline and other stdio-MCP hosts.
+
+Then **load `cg_context.md` as the system prompt** (or paste it at the top of
+the conversation). The model now knows the language *and* can verify it.
 
 ## Tools the server exposes
 
@@ -48,9 +106,8 @@ These are the only names that exist, and the server says so rather than hoping
 you read this table: a call to a tool that does not exist comes back with the
 whole list and the closest real name (`cg_compile` → "did you mean `cg_check`?"),
 `cg_capabilities` carries the list, and the first call of a session carries it
-once. The list is generated from the tool registry, so it cannot drift out of
-step with the table below — `TestNoStaleToolNames` and
-`TestStaticRostersMatchTheRegistry` fail if it does.
+once. The list is generated from the tool
+registry, so it cannot drift out of step with the table below.
 
 | Tool | Params (besides `source` / `extra_files`) | Returns | When to use it |
 |------|--------------------------------------------|---------|----------------|
@@ -95,71 +152,6 @@ Two tools take a backend selector:
   `top` defaults to the first non-testbench task/network (the synthesizable
   DUT); pass it when a file holds several designs. Override the yosys binary
   with `$YOSYS`.
-
-## Prerequisites
-
-- **Java 21** on `PATH`.
-- The **`cg-language-server.jar`**. Default location:
-  `~/neosyn/neosyn-studio/releng/lsp-server/target/cg-language-server.jar`.
-  Build it if missing: `cd releng/lsp-server && mvn package -DskipTests`.
-  Point elsewhere with the `CG_JAR` environment variable.
-- A dev license is assumed via `NEOSYN_CG_DEV=1` (the server sets it by
-  default).
-- **Optional, per backend:** `yosys` on `PATH` for `cg_synth` (override the
-  binary with `$YOSYS`); `iverilog` (Icarus Verilog) on `PATH` for
-  `cg_simulate(simulator='iverilog')`. Neither is needed for the default
-  bytecode simulator or for `cg_check` / `cg_generate_verilog`.
-
-## Install
-
-```bash
-pip install neosyn-fpga-mcp
-```
-
-Then point it at a built C⏚ compiler jar (download the prebuilt jar from
-[cg-compiler releases](https://github.com/Neosyn-Logic/cg-compiler/releases/latest),
-or build from source):
-
-```bash
-export CG_JAR=/path/to/cg-language-server.jar
-```
-
-Smoke-test the verification core without an MCP client:
-
-```bash
-python3 - <<'PY'
-from neosyn_fpga_mcp import cg_mcp_server as cg
-print(cg.simulate("package d;\ntask T { properties { test: { v:[1,2,3] } }\n"
-                  "  out push u8 v; u8 c; void setup(){c=0;}\n"
-                  "  void loop(){c=c+1; v.write(c);} }"))
-PY
-```
-
-## Connect it to an MCP host
-
-**Claude Desktop / Claude Code** (`claude_desktop_config.json` or the MCP
-settings): add a server entry. Use absolute paths.
-
-```json
-{
-  "mcpServers": {
-    "cg": {
-      "command": "neosyn-fpga-mcp",
-      "args": [],
-      "env": {
-        "CG_JAR": "/abs/path/releng/lsp-server/target/cg-language-server.jar",
-        "NEOSYN_CG_DEV": "1"
-      }
-    }
-  }
-}
-```
-
-The same `command`/`args`/`env` shape works for Cursor, Cline, and other
-stdio-MCP hosts.
-
-Then **load `cg_context.md` as the system prompt** (or paste it at the top of
-the conversation). The model now knows the language *and* can verify it.
 
 ## How the model should use it
 
@@ -231,117 +223,38 @@ whose demo drives constant inputs (DotProduct, FixedSqrt, Distance) reports
 `cg_synth` `verdict: FOLDED` — drive it with `in push` ports (as SqrDist does) so
 the datapath survives.
 
-`cg_adapt_demo.py` drives the whole loop and is the place to see it work:
+See `cg_adapt_demo.py` in the
+[repository](https://github.com/Neosyn-Logic/cg-agent-kit) to watch the
+seed-and-adapt loop run end to end, and `EVAL.md` for how C⏚ and Verilog write
+rates were measured on small tasks — including what that measurement does *not*
+show.
 
-```bash
-.venv/bin/python cg_adapt_demo.py --target l2_norm_sq   # one adapt, shows the C⏚
-.venv/bin/python cg_adapt_demo.py --matrix              # robustness sweep
-```
+## Documentation
 
-It seeds the model with `DotProduct.cg`, asks it to adapt to a new kernel
-(weighted sum of differences, sum of squares, scaled dot, SAXPY-reduce, squared
-distance), verifies with `cg_simulate`, and compares against an **independent**
-Q16.16 reference (the model can't pass by hardcoding a wrong self-check). The
-`--matrix` sweep also ablates *base vs no-base* and *terse vs detailed* prompts
-so you can see what actually carries the result.
+- [Setup and the full tool reference](https://neosyn.io/docs/agent-kit)
+- [Installing C⏚](https://neosyn.io/docs/install) — the extension and the CLI
+- [Licensing](https://neosyn.io/pricing)
 
-## What the eval measures — and what it does not
+## The older name
 
-`cg_vs_verilog_eval.py` writes the same small hardware tasks in C⏚ and in
-Verilog and verifies each with a real simulator. Read its aggregate percentage
-with care.
+This project was published as `cg-agent-kit` up to 1.0.0; "cg" is our shorthand
+for C⏚ and meant nothing to anyone searching for an FPGA tool. On PyPI that name
+is now a shim that installs this package, and inside the package
+`python -m cg_agent_kit.cg_mcp_server` and the `cg-mcp-server` command both
+still resolve — so existing instructions and host configs keep working. New
+installs should use `neosyn-fpga-mcp`.
 
-**The aggregate is a property of the task list, not of the languages.** Measured
-2026-08-24 at n=50 per cell (10 trials × 5 tasks), 9 of the 10 cells are
-*deterministic* — reproduced identically across two independent runs:
+## License
 
-| task | C⏚ first-try | Verilog first-try |
-|---|---|---|
-| Counter4 | 10/10 | 10/10 |
-| Accum3 | 10/10 | 10/10 |
-| Mod6 | **10/10** | **0/10** |
-| Toggle | **0/10** | 10/10 |
-| Fib8 | **0/10** | 9/10 |
+MIT. Copyright (c) 2026 Neosyn.
 
-Cells are 0/10 or 10/10, not rates. Each task that flips category moves the
-headline by 20 points, so any single number quoted from this harness is really
-a statement about which five tasks are in `TASKS`. The one stochastic cell
-(Fib8-verilog, 9/10) is the entire difference between Verilog 98% and 100% —
-i.e. repetition earned its keep in exactly the cell that disagreed with itself.
-**Choose `n` per cell, not per harness: the cells that need repetition announce
-themselves by varying.**
+The software is provided **"as is", without warranty of any kind**, express or
+implied, including but not limited to the warranties of merchantability, fitness
+for a particular purpose and noninfringement. In no event shall the authors or
+copyright holders be liable for any claim, damages or other liability, whether
+in an action of contract, tort or otherwise, arising from, out of or in
+connection with the software or the use or other dealings in the software. The
+full text ships with the package as `LICENSE`.
 
-Totals from that run, with the failure-kind fix below applied:
-
-```
-cg        first-try 30/50 (60%)  after-loop 49/50 (98%)  avg attempts 1.5  fails={'sim': 1}
-verilog   first-try 39/50 (78%)  after-loop 50/50 (100%) avg attempts 1.2  fails={}
-```
-
-An earlier writeup on the unmerged `docs/cg-agent-kit-eval` branch headlines
-"first-try C⏚ 93% > native Verilog 60%". That does not reproduce, and per the
-above it could not have meant what it says either way. Treat it as superseded.
-
-**A defect that was hiding the interesting result.** `verify_cg` labelled every
-diagnostic-bearing result `"compile"`, but a test-vector mismatch arrives *as* a
-diagnostic — so a design that compiled, simulated, and merely computed the wrong
-answer was counted as a compile failure. Both systematic C⏚ failures (Toggle,
-Fib8) are exactly that, and both are the **same root cause**: state updated
-before the port write, so the emitted sequence is off by one cycle. The
-mislabelling made C⏚'s residue look syntactic when it is a timing/ordering
-error. Fixed; `kind` now distinguishes `sim` from `compile`.
-
-**MEASURED before/after on that fix (2026-08-24).** The two deterministic cells, same
-harness, same model, 10 trials each, one variable — the `cg_context.md` edit:
-
-| task | before | after |
-|---|---|---|
-| Toggle | **0/10** | **9/10** |
-| Fib8 | **0/10** | **9/10** |
-
-C⏚ first-try on those two tasks: **0/20 → 18/20**. Both cells were *perfectly deterministic
-at zero* beforehand — twenty attempts across two independent runs, no passes — so a jump to
-9/10 is not run-to-run variance. Caveats: one model (qwen3.6:35b-a3b), n=10, two tasks. The
-compiler jar also changed between the runs, but that cannot affect **first-try**, because the
-model writes before it sees any compiler output; the after-loop figures are confounded and are
-not relied on here.
-
-Note the cells are now 9/10 rather than 10/10 — they stopped being deterministic, which is the
-harness saying these cells now need repetition where they previously did not.
-
-The root cause was not a missing example. The pack's own `Counter` was
-`count = count + 1; value.write(count);` — update, then write — for something described as
-starting at 0, and it emits `1,2,3…`. The corrective rule existed but was scoped to enum
-control FSMs and filed under a heading a counter author would not read. A curated corpus is a
-liability in the same way it is an asset: **a wrong example is code the model will copy.**
-Every example should be executed against a `test:` block that asserts its documented output —
-this one survived because nothing ever ran it.
-
-That failure class is why `cg_context.md` leads its state section with
-*write first, then update*, with right/wrong pairs and the emitted vectors —
-the wrong version reads like careful code and only the vectors reveal it.
-
-**`CG_SEED_MIN_SCORE` does nothing here.** Seeding lives in `cg_local_client.py`
-(`_seed_for`), a different runner. This harness never calls `cg.example()`, so
-setting the variable neither enables nor disables anything in it. It is a real
-safeguard for the client, and a no-op for the eval.
-
-## Files
-
-```
-neosyn-fpga-mcp/
-├── README.md            this file
-├── cg_context.md        the "C⏚ for LLMs" knowledge pack (system prompt)
-├── cg_mcp_server.py     the MCP server (stdlib core + thin mcp wrapper)
-├── examples/            verified C⏚ bases to seed-and-adapt from
-│   ├── RECIPES.md       the recipe catalogue (use_when / adapt / gotcha)
-│   ├── Counter.cg
-│   ├── DotProduct.cg
-│   ├── SqrDist.cg
-│   ├── FixedSqrt.cg
-│   └── Distance.cg
-├── cg_adapt_demo.py     seed-and-adapt demo + robustness matrix
-├── cg_vs_verilog_eval.py   measures C⏚-vs-Verilog write rates on small tasks
-├── cg_local_client.py   minimal local-LLM driver (Ollama / OpenAI-style)
-└── requirements.txt     `mcp` (only needed to run as a server)
-```
+C⏚, Cg and Neosyn are marks of Neosyn. The C⏚ compiler is a separate work under
+its own licence — see [neosyn.io/open](https://neosyn.io/open).
