@@ -50,6 +50,9 @@ Two ways to get that jar:
 - **Commercial** — the jar inside an installed
   [Neosyn C⏚ extension](https://neosyn.io/download), which adds the fast
   bytecode simulator and VHDL output.
+  It needs your licence file: set `NEOSYN_CG_LICENSE` to it, or keep it at the
+  default path the extension uses. Without one, every tool reports the licence
+  problem instead of running.
 
 `cg_capabilities` reports which one you have and what it can do, probed rather
 than assumed.
