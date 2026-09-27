@@ -423,6 +423,14 @@ task SimpleAdder {
 }
 ```
 
+The vector form is for **short** tests. Each port's list compiles into one method,
+and the JVM caps a method at 64 KB, so a vector holds a few thousand entries at
+most (measured: 2,000 `u8` values fit, 3,000 do not; the exact limit depends on
+the ports and the values). A whole frame, or enough values to push an
+accumulator past 2^32, needs the monitor form below: a stimulus task that
+GENERATES the values, and a monitor that checks them and sets `finished`. Too
+long a vector is reported as "a `test:` vector is too long to compile".
+
 **Monitor form** — a `finished` flag plus `terminate`, for networks:
 
 ```cg

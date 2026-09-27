@@ -427,6 +427,9 @@ _ASSERT_RE = re.compile(
     r'^Assertion failed: (?:(\S+?\.cg)(?::(\d+))? )?in (\S+): (.*?)(?: \[cycle (\d+)\])?\s*$', re.M)
 # The same failure from an older compiler: the bare expression under a Java stack trace.
 _LEGACY_ASSERT_RE = re.compile(r'java\.lang\.AssertionError: (.*)$', re.M)
+# A simulation the compiler refused with a reason and no file:line (from 3.3.x) -- e.g.
+#   [neosyn] Cannot simulate: a `test:` vector is too long to compile (...)
+_CANNOT_SIM_RE = re.compile(r'^\[neosyn\] (Cannot simulate: .*)$', re.M)
 _CHECKS_RE = re.compile(r"^Checks executed:\s*(\d+)", re.M)
 
 
@@ -507,6 +510,8 @@ def _sim_findings(out: str) -> tuple:
         diags.append({"file": file, "line": int(line) if line else None,
                       "message": f"assertion failed in {task}: {what}"
                                  + (f" (cycle {cycle})" if cycle else "")})
+    for m in _CANNOT_SIM_RE.finditer(out or ""):
+        diags.append({"file": None, "line": None, "message": m.group(1).strip()})
     if not diags:
         for m in _LEGACY_ASSERT_RE.finditer(out or ""):
             diags.append({"file": None, "line": None,

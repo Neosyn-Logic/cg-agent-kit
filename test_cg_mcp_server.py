@@ -1542,6 +1542,18 @@ class TestSimFindings(unittest.TestCase):
         self.assertEqual(len(diags), 1, diags)
         self.assertIn("v == resize(5, 8)", diags[0]["message"])
 
+    def test_a_too_long_vector_is_a_diagnostic(self):
+        # Real compiler output (neosyn-studio, AccelOne F89): a long literal `test:` vector used
+        # to be a raw MethodTooLargeException stack trace with no diagnostic at all.
+        out = ("[neosyn] Cannot simulate: a `test:` vector is too long to compile (the generated "
+               "t.Pass_expected.execute exceeds the JVM's 64 KB method limit). A literal vector is "
+               "for short tests: ... For a long stream, drive the design from a stimulus TASK ...\n"
+               "Simulation failed: Cannot simulate: a `test:` vector is too long to compile ...\n")
+        diags, _ = cg._sim_findings(out)
+        self.assertEqual(len(diags), 1, diags)
+        self.assertIn("vector is too long", diags[0]["message"])
+        self.assertIn("stimulus TASK", diags[0]["message"])
+
     def test_a_passing_run_has_no_assert_diagnostic(self):
         # The control: nothing in a clean run looks like a failure.
         out = ("Simulation started\nport y [vector 0] expected 1 -> 0x1\n"
