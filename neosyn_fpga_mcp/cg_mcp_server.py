@@ -42,6 +42,7 @@ dependency, so they can be unit-tested directly:
 Run as a server:  python cg_mcp_server.py   (after `pip install mcp`)
 """
 import difflib
+import hashlib
 import functools
 import inspect
 import json
@@ -379,6 +380,54 @@ def probe_bytecode(force: bool = False, timeout: int = 60) -> dict:
     return res
 
 
+def _sha256(path) -> str | None:
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return None
+
+
+def _kit_fingerprint() -> dict:
+    """Which kit is running: its version, and a fingerprint of the files it runs from. Computed
+    at import. A trial could not tell which kit build had run (AccelOne F90) -- the version alone
+    does not settle it, because an editable install runs whatever is in the working tree."""
+    pkg = Path(__file__).resolve().parent
+    h = hashlib.sha256()
+    for f in sorted(pkg.rglob("*")):
+        if f.is_file() and f.suffix in (".py", ".md", ".json", ".cg") and "__pycache__" not in f.parts:
+            h.update(f.relative_to(pkg).as_posix().encode() + b"\0" + f.read_bytes())
+    try:
+        from neosyn_fpga_mcp import __version__ as ver
+    except Exception:                                           # pragma: no cover
+        ver = None
+    return {"version": ver, "source_sha256": h.hexdigest(), "path": str(pkg)}
+
+
+_KIT = _kit_fingerprint()
+_JAR_ID = None
+
+
+def jar_identity() -> dict:
+    """Which compiler jar: path, sha256 and the version it reports. Cached for the process."""
+    global _JAR_ID
+    if _JAR_ID is None:
+        ident = {"path": str(JAR), "sha256": _sha256(JAR) if JAR.is_file() else None, "version": None}
+        if JAR.is_file():
+            try:
+                p = subprocess.run(["java", "-jar", str(JAR), "--version"], env=ENV, timeout=60,
+                                   capture_output=True, text=True, errors="replace")
+                m = re.search(r"\bv(\d+\.\d+\.\d+\S*)", (p.stdout or "") + (p.stderr or ""))
+                ident["version"] = m.group(1) if m else None
+            except Exception:                                   # pragma: no cover
+                pass
+        _JAR_ID = ident
+    return _JAR_ID
+
+
 def capabilities() -> dict:
     """What this host can actually do, probed rather than assumed -- so a model
     picks a backend from fact instead of a claim that may not hold here."""
@@ -410,6 +459,8 @@ def capabilities() -> dict:
     # same list and are deliberately not merged. The roster is generated from the
     # registry (see `tool_roster`), never restated here.
     return {"ok": True, "jar": str(JAR), "jar_present": JAR.is_file(),
+            # which builds actually ran -- version AND content hash, for both (AccelOne F90)
+            "build": {"kit": _KIT, "jar": jar_identity()},
             "bytecode_simulator": bc, "simulators": sims,
             "tools": {k: bool(v) for k, v in tools.items()},
             "available_tools": _roster_lines(),

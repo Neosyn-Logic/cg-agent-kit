@@ -361,6 +361,34 @@ class TestDocsCanBeReadOneSectionAtATime(unittest.TestCase):
                 self.assertTrue(t.get("sections"), f"{t['topic']} lists no sections")
 
 
+class TestBuildIdentity(unittest.TestCase):
+    """AccelOne F90. A trial could not tell which kit or jar had run: cg_capabilities gave the jar
+    as a path only. It now reports both builds by version AND content hash."""
+
+    def test_the_kit_reports_its_version_and_source_fingerprint(self):
+        import neosyn_fpga_mcp
+        kit = cg.capabilities()["build"]["kit"]
+        self.assertEqual(kit["version"], neosyn_fpga_mcp.__version__)
+        self.assertRegex(kit["source_sha256"], r"^[0-9a-f]{64}$")
+
+    def test_the_jar_is_identified_by_hash_and_reported_version(self):
+        import hashlib
+        from unittest import mock
+        with tempfile.NamedTemporaryFile(suffix=".jar", delete=False) as f:
+            f.write(b"not really a jar")
+        try:
+            fake = subprocess.CompletedProcess([], 0, stdout="Neosyn C? Language Server v9.8.7\n", stderr="")
+            with mock.patch.object(cg, "JAR", pathlib.Path(f.name)), \
+                    mock.patch.object(cg, "_JAR_ID", None), \
+                    mock.patch.object(cg.subprocess, "run", return_value=fake):
+                jar = cg.jar_identity()
+            self.assertEqual(jar["sha256"], hashlib.sha256(b"not really a jar").hexdigest())
+            self.assertEqual(jar["version"], "9.8.7")
+            self.assertEqual(jar["path"], f.name)
+        finally:
+            os.unlink(f.name)
+
+
 class TestNoLicenceBypass(unittest.TestCase):
     """2026-09-27. The kit defaulted NEOSYN_CG_DEV to "1" -- the commercial jar's internal
     licence bypass -- so the free extension's jar plus this package ran the paid simulator
