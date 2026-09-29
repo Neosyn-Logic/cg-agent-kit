@@ -898,7 +898,11 @@ def _simulate_iverilog(source: str, extra_files: dict | None, timeout: int) -> d
             # -n and no stdin: a failed assert calls $stop, and vvp otherwise drops to an
             # interactive prompt that waits for input until the tool timeout (devtoolkit-40:
             # >10 min). With -n, $stop ends the run like $finish.
-            vp = subprocess.run(["vvp", "-n", str(vvp)], cwd=str(work), env=ENV,
+            # Line-buffered: killed at the timeout, a block-buffered vvp loses everything it
+            # printed -- a run that had passed every check came back as an EMPTY timeout
+            # (devtoolkit-40 #6).
+            stdbuf = ["stdbuf", "-oL"] if shutil.which("stdbuf") else []
+            vp = subprocess.run(stdbuf + ["vvp", "-n", str(vvp)], cwd=str(work), env=ENV,
                                 stdin=subprocess.DEVNULL, timeout=timeout,
                                 capture_output=True, text=True, errors="replace")
             vout, vto = (vp.stdout or "") + (vp.stderr or ""), False
@@ -909,9 +913,21 @@ def _simulate_iverilog(source: str, extra_files: dict | None, timeout: int) -> d
                    (se if isinstance(se, str) else se.decode("utf-8", "replace"))
             vto = True
         ok, verdict = _vsim_verdict(vout, vto, timeout, _reports_checks(jar_identity()["version"]))
-        return {"ok": ok, "simulator": "iverilog",
-                "top": chosen.name[:-5], "verdict": verdict, "timed_out": vto,
-                "output": _clean(vout)}
+        top = chosen.name[:-5]
+        result = {"ok": ok, "simulator": "iverilog",
+                  "top": top, "verdict": verdict, "timed_out": vto,
+                  "output": _clean(vout)}
+        if vto and re.search(r"\btask\s+" + re.escape(top) + r"\b", source):
+            # The testbench generated from a TASK's `test:` vectors checks every vector and then
+            # never ends -- there is no end condition to reach -- so it always times out.
+            result["hint"] = (
+                f"`{top}` is a task: the testbench generated from its `test:` vectors checks "
+                "each vector (see the `[check]` lines) but has no end condition, so under "
+                "iverilog it always runs to the timeout. For a PASS/FAIL verdict, use "
+                "simulator='bytecode' (it ends on the last vector), or drive the task from a "
+                "test network with `properties { test: { terminate: \"monitor.finished\" } }` "
+                "-- cg_scaffold(kind='stream') gives one.")
+        return result
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
@@ -2759,6 +2775,11 @@ def _with_roster(result: dict, note: str = "") -> dict:
 
 
 _ROSTER_PUSHED = False
+# True once this process IS an MCP server (build_server). The first-call push exists to put
+# the exact tool names in front of a MODEL before its calls drift; a script importing the
+# kit as a library has no model to steer, and a driver that runs one process per call
+# (devtoolkit-40's cg.py) got the roster, and "it will not be repeated", on every call.
+_SERVING = False
 
 
 def _roster_on_first_call(result: dict) -> dict:
@@ -2772,7 +2793,7 @@ def _roster_on_first_call(result: dict) -> dict:
     trade stands. `CG_TOOL_ROSTER=off` drops this push; the unknown-tool answer
     is never optional and is not affected."""
     global _ROSTER_PUSHED
-    if _ROSTER_PUSHED or not isinstance(result, dict):
+    if not _SERVING or _ROSTER_PUSHED or not isinstance(result, dict):
         return result
     if os.environ.get("CG_TOOL_ROSTER", "").strip().lower() in ("off", "0", "no", "false"):
         return result
@@ -3187,6 +3208,8 @@ def build_server():
     except ImportError:                                          # pragma: no cover
         from mcp.server.fastmcp import FastMCP as _Server        # mcp 1.x
 
+    global _SERVING
+    _SERVING = True
     mcp = _Server("cg")
     # Registration reads the registry, so the tools the server EXPOSES and the
     # roster it PUSHES are the same list by construction and cannot drift apart.

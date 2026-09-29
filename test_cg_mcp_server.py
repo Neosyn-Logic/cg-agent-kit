@@ -2122,12 +2122,26 @@ class TestSessionStartPush(unittest.TestCase):
     before drift starts rather than after it."""
 
     def setUp(self):
-        self._saved = cg._ROSTER_PUSHED
-        cg._ROSTER_PUSHED = False
+        self._saved = (cg._ROSTER_PUSHED, cg._SERVING)
+        cg._ROSTER_PUSHED, cg._SERVING = False, True     # as under build_server()
 
     def tearDown(self):
-        cg._ROSTER_PUSHED = self._saved
+        cg._ROSTER_PUSHED, cg._SERVING = self._saved
         os.environ.pop("CG_TOOL_ROSTER", None)
+
+    def test_a_library_caller_never_gets_the_roster(self):
+        # devtoolkit-40 #6: a driver that imports the kit and runs one process per call got
+        # the roster -- "it will not be repeated" -- on every call. Only a server pushes it.
+        cg._SERVING = False
+        self.assertNotIn("available_tools", cg.cg_lint("task X {}\n"))
+        self.assertNotIn("tools_note", cg.cg_suggest_for_error("no such error"))
+
+    def test_building_the_server_turns_the_push_on(self):
+        if not MCP_OK:
+            self.skipTest("mcp package not installed")
+        cg._SERVING = False
+        cg.build_server()
+        self.assertTrue(cg._SERVING)
 
     def test_first_call_carries_the_roster_and_the_second_does_not(self):
         first = cg.cg_lint("task X {}\n")
@@ -2587,6 +2601,18 @@ class TestIverilogVerdictEndToEnd(unittest.TestCase):
         r = cg.simulate(src, simulator="iverilog", timeout=60)
         self.assertTrue(r["ok"], r)
         self.assertEqual(r["verdict"], "PASS (2 assert(s) checked)")
+
+    def test_a_task_level_vector_timeout_keeps_its_checks_and_says_why(self):
+        # devtoolkit-40 #6: the task-level testbench never ends; the timeout came back EMPTY
+        # because vvp's block-buffered output died with it.
+        src = ("package vs;\ntask Plus1 { properties { test: { a: [ 3, 9 ], y: [ 4, 10 ] } }\n"
+               "  in push u8 a; out push u8 y; void loop() { y.write((u8) (a.read() + 1)); } }\n")
+        r = cg.simulate(src, simulator="iverilog", timeout=8)
+        self.assertTrue(r["timed_out"])
+        self.assertFalse(r["ok"])
+        self.assertIn("2 assert(s) had passed", r["verdict"])
+        self.assertIn("[check]", r["output"])
+        self.assertIn("is a task", r["hint"])
 
     def test_a_network_that_asserts_nothing_is_not_a_pass(self):
         src = _VSIM_NET.replace("ASSERTS", "u8 v = y.read(); u8 w = y.read();")
