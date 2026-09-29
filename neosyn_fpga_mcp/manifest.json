@@ -320,6 +320,42 @@
       "note": "runtime-indexed read AND write; entry 0 hardwired to 0 via guards (no real cell); write applied before reads"
     },
     {
+      "name": "LineBuffer",
+      "kind": "primitive",
+      "family": "memory",
+      "ops": [
+        "array",
+        "indexed",
+        "stateful",
+        "memory"
+      ],
+      "tags": [
+        "line-buffer",
+        "linebuffer",
+        "ram",
+        "memory",
+        "lutram",
+        "bram",
+        "delay-line",
+        "row-buffer",
+        "window",
+        "stencil",
+        "image",
+        "video",
+        "2d-filter",
+        "sliding-window",
+        "array"
+      ],
+      "use_when": "delay a pixel stream by one row (or any fixed length) with a real RAM, the building block of 2-D window filters",
+      "adapt": "set W to the row width (and the pointer width to fit it); widen the element to hold several rows in one memory; chain for more rows",
+      "verified": {
+        "sim": true,
+        "yosys_cells": 100,
+        "xilinx": "2 x RAM32M (LUTRAM) + 21 FDCE + 17 LUT"
+      },
+      "note": "a state array written ONCE per cycle at a runtime index gets a registered write port and maps to RAM -- on the commercial compiler (3.3.0+); the open-source build keeps it in flip-flops, and the generic yosys flow has no RAM primitives either; read-before-write returns the previous row"
+    },
+    {
       "name": "BitFieldDecode",
       "kind": "primitive",
       "family": "decode",

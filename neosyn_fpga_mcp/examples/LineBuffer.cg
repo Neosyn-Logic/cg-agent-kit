@@ -1,0 +1,41 @@
+package com.example;
+
+// Verified Cg base — a LINE BUFFER: delays a pixel stream by exactly one row (W
+// pixels), the building block of any 2-D window (3x3 filters, stereo SAD, Sobel).
+// Each cycle it outputs the pixel from the same column of the PREVIOUS row and
+// stores the new one in its place.
+//
+// Patterns worth copying:
+//   - a STATE ARRAY (`u8 lb[W]`) written ONCE per cycle at a runtime index becomes
+//     a real memory: the compiler gives it one registered write port, and synthesis
+//     maps it to RAM (Vivado LUTRAM or block RAM, Yosys $mem) instead of W registers.
+//   - read BEFORE write in the same cycle: `lb[ptr]` returns the old value (last
+//     row), then the new pixel overwrites it.
+//   - a wrapping pointer with a compare, not `%`: `ptr == W - 1 ? 0 : ptr + 1`.
+//   - for several rows, chain line buffers, or widen the word: one array of
+//     `uint<24>` holding three 8-bit rows is ONE memory with one write per cycle.
+//   - the first row reads 0: the array starts zeroed.
+task LineBuffer {
+  // W = 4: `prev` is the input delayed by 4 pixels; the first 4 outputs are 0.
+  properties {
+    test: {
+      px:  [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+      prev: [0, 0, 0, 0, 1, 2, 3, 4, 5,  6,  7,  8]
+    }
+  }
+
+  const int W = 4;
+
+  in u8 px;
+  out u8 prev;
+
+  u8 lb[W];
+  u2 ptr;
+
+  void loop() {
+    u8 p = px.read();
+    prev.write(lb[ptr]);                              // last row's pixel, this column
+    lb[ptr] = p;                                     // this row's pixel takes its place
+    ptr = ptr == W - 1 ? (u2) 0 : (u2) (ptr + 1);
+  }
+}
