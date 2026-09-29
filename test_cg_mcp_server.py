@@ -2608,7 +2608,12 @@ class TestIverilogVerdictEndToEnd(unittest.TestCase):
         src = ("package vs;\ntask Plus1 { properties { test: { a: [ 3, 9 ], y: [ 4, 10 ] } }\n"
                "  in push u8 a; out push u8 y; void loop() { y.write((u8) (a.read() + 1)); } }\n")
         r = cg.simulate(src, simulator="iverilog", timeout=8)
-        self.assertTrue(r["timed_out"])
+        if not r["timed_out"]:
+            # A compiler with TRAPS T127 (neosyn-studio 6b78989+): the testbench ends after its
+            # last vector, so the same design now PASSes instead of timing out.
+            self.assertTrue(r["ok"], r)
+            self.assertEqual(r["verdict"], "PASS (2 assert(s) checked)")
+            return
         self.assertFalse(r["ok"])
         self.assertIn("2 assert(s) had passed", r["verdict"])
         self.assertIn("[check]", r["output"])
@@ -2671,6 +2676,78 @@ class TestStdLibraryNotice(unittest.TestCase):
             self.skipTest("this compiler emits no std/ files")
         self.assertIn("(c) Neosyn", r["notice"])
         self.assertIn("not redistribute them publicly", r["notice"])
+
+
+class TestPatternEncyclopedia(unittest.TestCase):
+    """Founder GO 2026-09-29: examples were not enough for a 27B model; the 29 Sep stereo runs failed
+    on missing PATTERNS and never called cg_example. An entry is an example plus sizing, pitfalls
+    (mistake -> symptom -> fix), related entries and what it needs -- REACHED from the context
+    pack's index and from diagnostics, not only by lookup."""
+
+    ENTRIES = ("LineBuffer", "RasterCounters", "Window3x3")
+
+    def meta(self):
+        return cg._load_meta()
+
+    def test_every_entry_has_the_encyclopedia_fields(self):
+        meta = self.meta()
+        for name, e in meta.items():
+            if not e.get("intents"):
+                continue
+            with self.subTest(entry=name):
+                for field in ("use_when", "sizing", "pitfalls", "related", "needs"):
+                    self.assertTrue(e.get(field), f"{name}: no {field}")
+                for pit in e["pitfalls"]:
+                    self.assertEqual(set(pit), {"mistake", "symptom", "fix"}, name)
+                for other in e["related"]:
+                    self.assertIn(other, meta, f"{name}: related entry {other} does not exist")
+                self.assertTrue((cg._EXAMPLES_DIR / f"{name}.cg").is_file())
+
+    def test_the_first_slice_is_present(self):
+        meta = self.meta()
+        for name in self.ENTRIES:
+            self.assertTrue(meta[name].get("intents"), name)
+
+    def test_intents_reach_the_entry(self):
+        for query, want in (("3x3 window on a pixel stream", "Window3x3"),
+                            ("neighbourhood of each pixel", "Window3x3"),
+                            ("x and y of each pixel", "RasterCounters"),
+                            ("delay a pixel stream by one row", "LineBuffer"),
+                            ("line buffer", "LineBuffer"), ("ram", "LineBuffer")):
+            self.assertEqual(cg.example(query)["name"], want, query)
+
+    def test_the_context_pack_ends_with_the_index(self):
+        r = cg.docs("context")
+        self.assertEqual(r["sections"][-1], "Pattern encyclopedia")
+        index = cg.docs("context", "Pattern encyclopedia")["content"]
+        for name in self.ENTRIES:
+            self.assertIn(f"**{name}**", index)
+
+    def test_a_runtime_modulo_points_to_raster_counters(self):
+        r = cg.suggest_for_error("the right operand of '%' must be a compile-time constant "
+                                 "(use the std.math.Divide built-in for a variable divisor)")
+        self.assertEqual(r["recipe"], "RasterCounters")
+        self.assertIn("COUNT instead", r["hint"])
+        # division keeps its own recipe
+        self.assertEqual(cg.suggest_for_error("the right operand of '/' must be a compile-time "
+                                              "constant")["recipe"], "Recip")
+
+    @unittest.skipUnless(BYTECODE_OK, "needs the bytecode simulator")
+    def test_each_entry_passes_and_its_negative_control_fails(self):
+        broken = {
+            "LineBuffer": ("    prev.write(lb[ptr]);                              // last row's pixel, this column\n"
+                           "    lb[ptr] = p;",
+                           "    lb[ptr] = p;\n    prev.write(lb[ptr]);"),                    # write before read
+            "RasterCounters": ("    if (cx == W - 1) {", "    cy = (u2) (cy + 1);\n    if (cx == W - 1) {"),
+            "Window3x3": ("    if (x >= 2 && y >= 2) {", "    if (true) {"),                  # emit on arrival
+        }
+        for name, (old, new) in broken.items():
+            with self.subTest(entry=name):
+                src = (cg._EXAMPLES_DIR / f"{name}.cg").read_text()
+                self.assertTrue(cg.simulate(src)["ok"], f"{name} itself must pass")
+                self.assertEqual(src.count(old), 1, f"{name}: the mutation site moved")
+                self.assertFalse(cg.simulate(src.replace(old, new))["ok"],
+                                 f"{name}: the broken variant must FAIL its own test")
 
 if __name__ == "__main__":
     unittest.main()

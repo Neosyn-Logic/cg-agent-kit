@@ -1,0 +1,50 @@
+package com.example;
+
+// Encyclopedia entry: RASTER COUNTERS -- the column x and row y of each pixel of a raster
+// stream (left to right, top to bottom), plus start-of-frame and end-of-line flags,
+// WITHOUT `%` or `/` (the compiler rejects a runtime `x = n % W`: there is no divider).
+//
+// Patterns worth copying:
+//   - count, do not divide: x wraps with a compare (`x == W - 1 ? 0 : x + 1`), and y
+//     advances only on the cycle x wraps.
+//   - report the position of THIS pixel, then advance: write x/y/flags first, update the
+//     counters after -- so pixel 0 is (0, 0).
+//   - size the counters to the image, not to 32 bits: clog2(W) and clog2(H) bits.
+//   - the flags are what downstream logic keys on: `sol` (x == 0), `eol` (x == W - 1),
+//     `sof` (x == 0 && y == 0). A window or a line buffer uses x as its address.
+task RasterCounters {
+  // W = 4, H = 3: 14 pixels = one frame of 12, then the next frame starts at (0, 0).
+  properties {
+    test: {
+      px:  [ 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7 ],
+      x:   [ 0, 1, 2, 3, 0, 1, 2, 3, 0, 1, 2, 3, 0, 1 ],
+      y:   [ 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 0, 0 ],
+      eol: [ false, false, false, true, false, false, false, true, false, false, false, true, false, false ],
+      sof: [ true, false, false, false, false, false, false, false, false, false, false, false, true, false ]
+    }
+  }
+
+  const int W = 4;
+  const int H = 3;
+
+  in u8 px;
+  out u2 x, y;
+  out bool eol, sof;
+
+  u2 cx;
+  u2 cy;
+
+  void loop() {
+    u8 p = px.read();                      // the pixel itself is not needed here
+    x.write(cx);
+    y.write(cy);
+    eol.write(cx == W - 1);
+    sof.write(cx == 0 && cy == 0);
+    if (cx == W - 1) {
+      cx = 0;
+      cy = cy == H - 1 ? (u2) 0 : (u2) (cy + 1);
+    } else {
+      cx = (u2) (cx + 1);
+    }
+  }
+}

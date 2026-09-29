@@ -1470,6 +1470,8 @@ def docs(topic: str = "", section: str = "") -> dict:
         text = path.read_text(errors="replace")
     except OSError as e:
         return {"ok": False, "error": str(e)}
+    if topic.strip().lower() == "context":
+        text = text.rstrip() + "\n\n" + _encyclopedia_index()
     sections = _doc_sections(text)
     names = [n for n, _ in sections]
     if not section:
@@ -1515,6 +1517,23 @@ def _load_meta() -> dict:
         return {}
 
 
+def _encyclopedia_index() -> str:
+    """The Pattern Encyclopedia's index, one line per entry, GENERATED from the manifest so it
+    cannot drift from the entries. It ends the `context` doc -- the document every run reads
+    (the 29 Sep stereo runs called cg_docs 12 times and cg_example 0 times)."""
+    lines = ["## Pattern encyclopedia",
+             "",
+             "Verified design patterns, each with a compiling idiom, sizing, the mistakes seen in",
+             "real runs (with their symptoms) and a check. Fetch one with `cg_example(\"<name>\")`:",
+             "you get the source AND its `sizing`, `pitfalls` and `related` entries.",
+             ""]
+    for name, e in _load_meta().items():
+        if e.get("intents"):
+            lines.append(f"- **{name}** -- {e.get('use_when', '')} "
+                         f"(e.g. \"{e['intents'][0]}\"; needs: {e.get('needs', 'any')})")
+    return "\n".join(lines) + "\n"
+
+
 def _norm(s: str) -> str:
     return re.sub(r"[-_/]", " ", s.lower())
 
@@ -1550,6 +1569,13 @@ def _score(query: str, name: str, entry: dict) -> int:
         all_tag_words |= tw
         if tw and tw <= qw:
             s += 6 + len("".join(tw))      # full tag phrase present -> specificity bonus
+    # Encyclopedia `intents`: the phrases someone searches with ("neighbourhood of each pixel").
+    # A phrase whose meaningful words are all in the query is as specific as a full tag.
+    for phrase in entry.get("intents", []):
+        iw = _words(phrase) - _STOP
+        all_tag_words |= iw
+        if iw and iw <= qw:
+            s += 8 + len("".join(iw))
     # partial overlap (distinct words once); stopwords filtered so a query's "a"
     # can't partial-match a tag like "a/b". Full-tag matches above are unfiltered,
     # so an actual "a/b" query still hits Divide's "a/b" tag.
@@ -1800,6 +1826,15 @@ _FAIL_HINTS = [
      "above this one, fix those first: a derailed parser reports names it never "
      "got to declare."),
     # --------------------------------------------------- 2. synthesizability
+    # `%` first, and to RasterCounters: in a stream design a runtime `%` is nearly always a
+    # POSITION (x = n % W for a pixel's column), which needs counting, not a divider -- the
+    # 29 Sep stereo runs hit exactly this (Pattern Encyclopedia, raster-counters).
+    (re.compile(r"right operand of '%'", re.I),
+     "RasterCounters",
+     "a runtime `%` has no hardware. If it computes a POSITION or a wrap (a pixel's column "
+     "x = n % W, an index that wraps), COUNT instead: wrap with a compare "
+     "(`x == W - 1 ? 0 : x + 1`) and advance the row when x wraps -- see RasterCounters. "
+     "Only for a true remainder of two runtime values, use the std.math.Divide built-in."),
     (re.compile(r"right operand of '/'|right operand of '%'|\bmodulo\b", re.I),
      "Recip",
      "division or modulo by a runtime value isn't synthesizable — seed the Recip "

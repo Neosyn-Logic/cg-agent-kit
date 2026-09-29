@@ -353,7 +353,177 @@
         "yosys_cells": 100,
         "xilinx": "2 x RAM32M (LUTRAM) + 21 FDCE + 17 LUT"
       },
-      "note": "a state array written ONCE per cycle at a runtime index gets a registered write port and maps to RAM -- on the commercial compiler (3.3.0+); the open-source build keeps it in flip-flops, and the generic yosys flow has no RAM primitives either; read-before-write returns the previous row"
+      "note": "a state array written ONCE per cycle at a runtime index gets a registered write port and maps to RAM -- on the commercial compiler (3.3.0+); the open-source build keeps it in flip-flops, and the generic yosys flow has no RAM primitives either; read-before-write returns the previous row",
+      "intents": [
+        "delay a pixel stream by one row",
+        "keep the previous row of an image",
+        "row buffer for a 2-D filter",
+        "memory that maps to LUTRAM or block RAM"
+      ],
+      "sizing": "W entries of the pixel width; 1 read + 1 write per cycle; latency: output = the pixel W cycles earlier (0 for the first row)",
+      "pitfalls": [
+        {
+          "mistake": "writing lb[ptr] BEFORE reading it",
+          "symptom": "the output equals the input (no delay)",
+          "fix": "read first, then write, in the same loop()"
+        },
+        {
+          "mistake": "one array per row, each written every cycle",
+          "symptom": "several RAMs, or flip-flops, where one would do",
+          "fix": "widen the element: one uint<8*rows> array holds all previous rows"
+        },
+        {
+          "mistake": "a runtime `% W` for the pointer",
+          "symptom": "compile error: right operand of '%' must be a compile-time constant",
+          "fix": "wrap with a compare (see raster-counters)"
+        }
+      ],
+      "related": [
+        "RasterCounters",
+        "Window3x3"
+      ],
+      "needs": "commercial for RAM mapping; any compiler to simulate"
+    },
+    {
+      "name": "RasterCounters",
+      "kind": "primitive",
+      "family": "image",
+      "ops": [
+        "counter",
+        "stateful"
+      ],
+      "tags": [
+        "raster",
+        "raster-counters",
+        "pixel-position",
+        "column-row",
+        "x-y",
+        "scanline",
+        "image",
+        "video",
+        "frame",
+        "end-of-line",
+        "start-of-frame"
+      ],
+      "intents": [
+        "x and y of each pixel",
+        "column and row of a pixel stream",
+        "which pixel is this",
+        "count pixels without division",
+        "replace count % W",
+        "start of frame and end of line flags"
+      ],
+      "use_when": "a raster pixel stream needs each pixel's column and row, or start-of-frame / end-of-line flags, without % or /",
+      "adapt": "set W and H (counter widths to clog2 of each); add a frame counter if needed; key line buffers and windows off x",
+      "sizing": "x: clog2(W) bits, y: clog2(H) bits; zero latency (the position of THIS pixel); ~40 xilinx cells at 4x3",
+      "pitfalls": [
+        {
+          "mistake": "x = n % W, y = n / W",
+          "symptom": "compile error: right operand of '%' (or '/') must be a compile-time constant",
+          "fix": "count: x wraps with a compare, y advances when x wraps"
+        },
+        {
+          "mistake": "advancing the counters before writing them",
+          "symptom": "pixel 0 reported as (1, 0); every position off by one",
+          "fix": "write x/y first, update after"
+        },
+        {
+          "mistake": "32-bit counters",
+          "symptom": "wide adders and comparators for a small image",
+          "fix": "size to clog2(W), clog2(H)"
+        }
+      ],
+      "related": [
+        "LineBuffer",
+        "Window3x3"
+      ],
+      "needs": "any",
+      "verified": {
+        "sim": true,
+        "iverilog": "PASS (56 checks)",
+        "xilinx_cells": 43,
+        "negative_control": "y advancing every pixel FAILS"
+      },
+      "note": "reports the position of the pixel being read this cycle; sof/eol flags for downstream logic"
+    },
+    {
+      "name": "Window3x3",
+      "kind": "primitive",
+      "family": "image",
+      "ops": [
+        "window",
+        "array",
+        "memory",
+        "accumulate",
+        "stateful"
+      ],
+      "tags": [
+        "window",
+        "sliding-window",
+        "3x3",
+        "kxk",
+        "neighbourhood",
+        "box-filter",
+        "box-sum",
+        "convolution",
+        "stencil",
+        "image",
+        "video",
+        "2d",
+        "latency-alignment"
+      ],
+      "intents": [
+        "3x3 window on a pixel stream",
+        "neighbourhood of each pixel",
+        "sliding window over an image",
+        "box filter",
+        "block matching window",
+        "convolution window",
+        "sum over a window"
+      ],
+      "use_when": "each pixel of a raster stream needs its k x k neighbourhood (a filter, a window sum, block matching)",
+      "adapt": "for k x k keep k-1 previous rows (widen the packed word) and k-1 column sums; replace the sum by any per-window function; add border handling if the task needs outputs at the edges",
+      "sizing": "one memory of W words holding the k-1 previous rows; k-1 column registers; latency: the window centred on (x-1, y-1) completes when (x, y) arrives; outputs only for x >= k-1, y >= k-1; widths: column of 3 x u8 = 10 bits, 3x3 sum = 12 bits",
+      "pitfalls": [
+        {
+          "mistake": "emitting a result for every arriving pixel",
+          "symptom": "the first outputs mix the previous row's tail into the window; expected values shift",
+          "fix": "emit only when the window is complete (x >= k-1 && y >= k-1)"
+        },
+        {
+          "mistake": "one line-buffer array per row, each written every cycle",
+          "symptom": "k-1 RAMs or flip-flop arrays",
+          "fix": "pack the previous rows into one word: one read and one write per cycle"
+        },
+        {
+          "mistake": "indexing rows[x - 1] or rows[x + 1] at the edges",
+          "symptom": "reads out of range at x = 0 or x = W-1",
+          "fix": "shift columns through registers instead of reading neighbours from the memory"
+        },
+        {
+          "mistake": "a u8 sum",
+          "symptom": "wraps: 9 pixels of 200 give 776, not 1800 mod 256",
+          "fix": "size the sum: 8 + clog2(9) = 12 bits"
+        },
+        {
+          "mistake": "expected values computed inside the C⏚ test",
+          "symptom": "runtime % or wide multiplies rejected; the test never compiles",
+          "fix": "compute them on the host (see host test vectors in cg_docs context)"
+        }
+      ],
+      "related": [
+        "LineBuffer",
+        "RasterCounters",
+        "MovingAverage"
+      ],
+      "needs": "commercial for RAM mapping; any compiler to simulate",
+      "verified": {
+        "sim": true,
+        "iverilog": "PASS (4 checks)",
+        "xilinx": "3 x RAM32M (LUTRAM), 263 cells",
+        "negative_control": "emitting on arrival FAILS"
+      },
+      "note": "window sum for the window whose bottom-right pixel just arrived; nothing is emitted for incomplete windows"
     },
     {
       "name": "BitFieldDecode",

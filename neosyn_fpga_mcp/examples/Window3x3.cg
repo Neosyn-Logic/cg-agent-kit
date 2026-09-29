@@ -1,0 +1,62 @@
+package com.example;
+
+// Encyclopedia entry: 3x3 SLIDING WINDOW on a raster pixel stream -- here reduced to the
+// window SUM (a box filter), the shape every 3x3 filter, Sobel, erosion or block-matching
+// window starts from. Built from two other entries: raster-counters and line-buffer.
+//
+// Patterns worth copying:
+//   - ONE memory for the two previous rows: `uint<16> rows[W]` holds {row y-2, row y-1}
+//     for each column, so there is one read and ONE write per cycle -> one RAM, not two.
+//     Shifting the rows is just re-packing: rows[x] = {row y-1, this pixel}.
+//   - the window moves right by shifting COLUMNS: keep the last two column sums, not nine
+//     pixels; a 3x3 sum is colsum(x) + colsum(x-1) + colsum(x-2).
+//   - latency alignment: the window centred on (x-1, y-1) is complete only when pixel
+//     (x, y) arrives, and only for x >= 2 and y >= 2 -- emit then, not on arrival. The
+//     output is the sum for the window whose BOTTOM-RIGHT pixel just arrived.
+//   - borders: this entry emits nothing for incomplete windows (a "valid" region of
+//     (W-2) x (H-2) outputs). Clip, replicate or zero-pad instead if the task says so --
+//     and test it.
+//   - widths grow: a column of three u8 needs 10 bits, nine of them 12 bits.
+task Window3x3 {
+  // A 4x4 image 1..16, row by row. Complete windows (bottom-right at (2,2), (3,2), (2,3),
+  // (3,3)): 1+2+3+5+6+7+9+10+11 = 54, then 63, 90, 99. Expected values like these come
+  // from the host reference, not from C⏚ (see the host-test-vectors entry).
+  properties {
+    test: {
+      px:  [ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 ],
+      sum: [ 54, 63, 90, 99 ]
+    }
+  }
+
+  const int W = 4;
+  const int H = 4;
+
+  in u8 px;
+  out push uint<12> sum;
+
+  uint<16> rows[W];         // {row y-2, row y-1} per column: one memory
+  u2 x;
+  u2 y;
+  uint<10> c1;              // column sum at x-1
+  uint<10> c2;              // column sum at x-2
+
+  void loop() {
+    u8 p = px.read();
+    uint<16> above = rows[x];
+    u8 up2 = (u8) (above >> 8);                       // row y-2, this column
+    u8 up1 = (u8) above;                              // row y-1, this column
+    rows[x] = (uint<16>) (((uint<16>) up1 << 8) | p);  // rows move up by one
+    uint<10> c0 = (uint<10>) ((uint<10>) up2 + up1 + p);
+    if (x >= 2 && y >= 2) {                            // the window is complete
+      sum.write((uint<12>) ((uint<12>) c0 + c1 + c2));
+    }
+    c2 = c1;
+    c1 = c0;
+    if (x == W - 1) {
+      x = 0;
+      y = y == H - 1 ? (u2) 0 : (u2) (y + 1);
+    } else {
+      x = (u2) (x + 1);
+    }
+  }
+}
