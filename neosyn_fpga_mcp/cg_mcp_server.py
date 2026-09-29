@@ -805,6 +805,42 @@ _VSIM_FAIL = ("Assertion failed", "TEST FAILED", "FAILED", "Mismatch", "mismatch
 _VSIM_PASS = ("PASSED", "assertion passed", "TEST PASSED", "checksum OK")
 
 
+def _reports_checks(version: str | None) -> bool:
+    """Does this compiler print `[check] ... first passed` for every assert? From 3.4.0 on."""
+    m = re.match(r"(\d+)\.(\d+)\.(\d+)", version or "")
+    return bool(m) and tuple(int(g) for g in m.groups()) >= (3, 4, 0)
+
+
+def _vsim_verdict(out: str, timed_out: bool, timeout: int, reports_checks: bool) -> tuple[bool, str]:
+    """(ok, verdict) for a vvp run. The generated testbench prints `[terminate] ...` when the
+    test's end condition fires, and -- from compiler 3.4.0 -- `[check] <cond> first passed` the
+    first time each assert holds. Reaching the end is not a pass on its own: a run whose asserts
+    never executed looks the same (TRAPS T112), so where the compiler reports asserts, at least
+    one must have run."""
+    lines = out.splitlines()
+    checks = sum(1 for l in lines if l.startswith("[check]"))
+    terminated = any(l.startswith("[terminate]") for l in lines)
+    # A [check] line echoes the assert's own condition, which may well mention `mismatch` or
+    # `failed`: the free-text markers are looked for everywhere else.
+    rest = "\n".join(l for l in lines if not l.startswith("[check]"))
+    if any(m in rest for m in _VSIM_FAIL):
+        return False, "FAIL"
+    if timed_out:
+        return False, (f"TIMEOUT after {timeout}s: the test never reached its end condition"
+                       + (f" ({checks} assert(s) had passed)" if checks else ""))
+    if terminated and checks:
+        return True, f"PASS ({checks} assert(s) checked)"
+    if terminated:
+        if reports_checks:
+            return False, ("NO CHECK: the simulation reached its end, but no assert ever ran -- "
+                           "nothing was checked")
+        return True, ("PASS (reached its end; this compiler does not report individual asserts "
+                      "-- 3.4.0 and later say how many were checked)")
+    if any(m in rest for m in _VSIM_PASS):
+        return True, "PASS"
+    return True, "ran (no explicit pass/fail markers)"
+
+
 def _simulate_iverilog(source: str, extra_files: dict | None, timeout: int) -> dict:
     """Generate Verilog + testbench and run it under Icarus Verilog (vvp).
     Mirrors the cg-ip-cores run_pipeline vsim invocation
@@ -859,8 +895,12 @@ def _simulate_iverilog(source: str, extra_files: dict | None, timeout: int) -> d
                     "top": chosen.name[:-5],
                     "output": _clean((cp.stdout or "") + (cp.stderr or ""))}
         try:
-            vp = subprocess.run(["vvp", str(vvp)], cwd=str(work), env=ENV,
-                                timeout=timeout, capture_output=True, text=True, errors="replace")
+            # -n and no stdin: a failed assert calls $stop, and vvp otherwise drops to an
+            # interactive prompt that waits for input until the tool timeout (devtoolkit-40:
+            # >10 min). With -n, $stop ends the run like $finish.
+            vp = subprocess.run(["vvp", "-n", str(vvp)], cwd=str(work), env=ENV,
+                                stdin=subprocess.DEVNULL, timeout=timeout,
+                                capture_output=True, text=True, errors="replace")
             vout, vto = (vp.stdout or "") + (vp.stderr or ""), False
         except subprocess.TimeoutExpired as e:
             so = e.stdout or ""
@@ -868,11 +908,8 @@ def _simulate_iverilog(source: str, extra_files: dict | None, timeout: int) -> d
             vout = (so if isinstance(so, str) else so.decode("utf-8", "replace")) + \
                    (se if isinstance(se, str) else se.decode("utf-8", "replace"))
             vto = True
-        failed = any(m in vout for m in _VSIM_FAIL)
-        passed = any(m in vout for m in _VSIM_PASS)
-        verdict = ("FAIL" if failed else "PASS" if passed
-                   else "ran (no explicit pass/fail markers)")
-        return {"ok": (not vto) and (not failed), "simulator": "iverilog",
+        ok, verdict = _vsim_verdict(vout, vto, timeout, _reports_checks(jar_identity()["version"]))
+        return {"ok": ok, "simulator": "iverilog",
                 "top": chosen.name[:-5], "verdict": verdict, "timed_out": vto,
                 "output": _clean(vout)}
     finally:

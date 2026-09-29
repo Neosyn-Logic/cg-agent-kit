@@ -2487,5 +2487,112 @@ class TestJarIdentityIsTakenAtImport(unittest.TestCase):
         self.assertEqual(r["verified"]["jar_sha256"], cg._sha256(cg.JAR))
         self.assertNotIn("jar_changed", r)
 
+
+_VSIM_NET = """package vs;
+task Plus1 { in push u8 a; out push u8 y; void loop() { y.write((u8) (a.read() + 1)); } }
+network Test_Plus1 {
+    properties { test: { terminate: "monitor.finished" } }
+    driver = new task { out push u8 a; void setup() { a.write(3); a.write(9); } };
+    dut = new Plus1();
+    dut.reads(driver.a);
+    monitor = new task {
+        in push u8 y;
+        bool finished;
+        void setup() { ASSERTS finished = true; }
+    };
+    monitor.reads(dut.y);
+}
+"""
+
+
+class TestIverilogVerdict(unittest.TestCase):
+    """devtoolkit-40 round 2 #8. A failed assert calls $stop, and vvp -- run without -n and with
+    stdin open -- waited at its interactive prompt until the tool timeout (>10 min). And the
+    verdict looked only for free-text markers, so a correct generated test read "ran (no explicit
+    pass/fail markers)". The generated testbench says `[terminate]` at its end and, from 3.4.0,
+    `[check]` for each assert: the verdict now reads those."""
+
+    V = staticmethod(lambda out, to=False, rc=True: cg._vsim_verdict(out, to, 60, rc))
+
+    def test_terminate_and_checks_pass_with_the_count(self):
+        self.assertEqual(self.V("[check] (y == 8'h4) first passed at 125\n"
+                                "[check] (y == 8'ha) first passed at 135\n"
+                                "[terminate] monitor.finished asserted at 145\n"),
+                         (True, "PASS (2 assert(s) checked)"))
+
+    def test_a_failed_assert_fails(self):
+        ok, v = self.V("[check] (y == 8'h4) first passed at 125\nAssertion failed: (y == 8'hb)\n")
+        self.assertEqual((ok, v), (False, "FAIL"))
+
+    def test_reaching_the_end_with_no_assert_is_not_a_pass_where_asserts_are_reported(self):
+        ok, v = self.V("[terminate] monitor.finished asserted at 145\n")
+        self.assertFalse(ok)
+        self.assertIn("no assert ever ran", v)
+
+    def test_an_older_compiler_that_reports_no_asserts_is_not_failed_for_it(self):
+        ok, v = self.V("[terminate] monitor.finished asserted at 145\n", rc=False)
+        self.assertTrue(ok)
+        self.assertIn("does not report individual asserts", v)
+
+    def test_a_timeout_is_not_a_pass_and_says_what_had_passed(self):
+        ok, v = self.V("[check] (y == 8'h4) first passed at 125\n", to=True)
+        self.assertFalse(ok)
+        self.assertIn("TIMEOUT after 60s", v)
+        self.assertIn("1 assert(s) had passed", v)
+
+    def test_a_check_line_mentioning_mismatch_is_not_a_failure(self):
+        ok, v = self.V("[check] (mismatch == 1'h0) first passed at 5\n"
+                       "[terminate] monitor.finished asserted at 9\n")
+        self.assertEqual((ok, v), (True, "PASS (1 assert(s) checked)"))
+
+    def test_which_compilers_report_checks(self):
+        for ver, want in (("3.4.0", True), ("3.10.1", True), ("4.0.0-rc1", True),
+                          ("3.3.0", False), ("2.6.9", False), (None, False), ("", False)):
+            self.assertEqual(cg._reports_checks(ver), want, ver)
+
+
+@unittest.skipUnless(JAR_OK and IVERILOG_OK, "jar or iverilog/vvp missing")
+class TestIverilogVerdictEndToEnd(unittest.TestCase):
+    def setUp(self):
+        if not cg._reports_checks(cg.jar_identity()["version"]):
+            self.skipTest("this compiler does not print [check] (before 3.4.0, or open-source)")
+
+    def test_a_failing_assert_returns_at_once_not_at_the_timeout(self):
+        # Under an MCP client the server's stdin is the protocol pipe, held OPEN -- that is
+        # what vvp inherited and waited on. A test runner's stdin is not, and the hang does
+        # not show there, so the call runs in a child whose stdin stays open.
+        import time
+        here = str(pathlib.Path(__file__).resolve().parent)
+        code = ("import sys, json; sys.path.insert(0, %r); import test_cg_mcp_server as t; "
+                "from neosyn_fpga_mcp import cg_mcp_server as cg; "
+                "r = cg.simulate(t._VSIM_NET.replace('ASSERTS', "
+                "'assert(y.read() == 4); assert(y.read() == 11);'), simulator='iverilog', timeout=40); "
+                "print(json.dumps({'ok': r['ok'], 'verdict': r.get('verdict'), "
+                "'timed_out': r.get('timed_out')}))" % here)
+        t0 = time.monotonic()
+        child = subprocess.Popen([sys.executable, "-c", code], stdin=subprocess.PIPE,
+                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, cwd=here)
+        try:
+            line = child.stdout.read().decode().strip().splitlines()[-1]
+            child.wait(timeout=90)
+        finally:
+            child.stdin.close()
+        took = time.monotonic() - t0
+        r = json.loads(line)
+        self.assertEqual((r["ok"], r["verdict"], r["timed_out"]), (False, "FAIL", False), r)
+        self.assertLess(took, 30, "vvp waited at its $stop prompt on the open stdin")
+
+    def test_a_passing_network_says_how_many_asserts_ran(self):
+        src = _VSIM_NET.replace("ASSERTS", "assert(y.read() == 4); assert(y.read() == 10);")
+        r = cg.simulate(src, simulator="iverilog", timeout=60)
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(r["verdict"], "PASS (2 assert(s) checked)")
+
+    def test_a_network_that_asserts_nothing_is_not_a_pass(self):
+        src = _VSIM_NET.replace("ASSERTS", "u8 v = y.read(); u8 w = y.read();")
+        r = cg.simulate(src, simulator="iverilog", timeout=60)
+        self.assertFalse(r["ok"], r)
+        self.assertIn("no assert ever ran", r["verdict"])
+
 if __name__ == "__main__":
     unittest.main()
