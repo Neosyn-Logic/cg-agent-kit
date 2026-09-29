@@ -293,6 +293,61 @@ def _package_files(package_dir: str | None) -> dict:
         return {}
 
 
+def _normalized(text: str) -> str:
+    """The text as compared: line endings unified, trailing newlines dropped."""
+    return text.replace("\r\n", "\n").rstrip("\n")
+
+
+def _source_of(source: str, path: str | None) -> tuple[str, dict | None, dict | None]:
+    """Decide WHAT a tool verifies, and say so (F92, devtoolkit-93).
+
+    A tool that only takes text verifies the text: a model fixed a number in the
+    argument, the second call passed, and the FILE on disk still failed -- the
+    transcript said pass, the artefact failed. With `path` the tool reads the file
+    itself; with `path` AND `source` the two must agree, else the call is refused
+    with the first line that differs. Returns (text, verified, refusal): `verified`
+    goes into every result -- the path (or None for text only) and the sha256 of
+    exactly what was checked; `refusal` is a complete result to return instead."""
+    def refuse(message: str, line: int | None = None, file: str | None = None) -> dict:
+        return {"ok": False, "refused": True,
+                "diagnostics": [{"file": file, "line": line, "message": message}],
+                "summary": "refused: " + message, "verified": None}
+
+    resolved = None
+    if path:
+        base = Path(os.environ.get("PROJECT_ROOT", ".")).resolve()
+        p = Path(path)
+        resolved = (base / p if not p.is_absolute() else p).resolve()
+        if resolved.suffix != ".cg" or not resolved.is_file():
+            return "", None, refuse(f"`path` must name an existing .cg file; got {path!r} "
+                                    f"(resolved to {resolved}, relative paths are under "
+                                    f"$PROJECT_ROOT = {base})")
+        try:
+            on_disk = resolved.read_text()
+        except (OSError, UnicodeDecodeError) as e:
+            return "", None, refuse(f"cannot read {resolved}: {e}")
+        if source and _normalized(source) != _normalized(on_disk):
+            a, b = _normalized(source).split("\n"), _normalized(on_disk).split("\n")
+            n = next((i for i, (x, y) in enumerate(zip(a, b)) if x != y), min(len(a), len(b)))
+            passed = a[n] if n < len(a) else "<end of text>"
+            saved = b[n] if n < len(b) else "<end of file>"
+            return "", None, refuse(
+                f"`source` and the file at `path` differ from line {n + 1}: the text you "
+                f"passed has {passed!r}, the file has {saved!r}. Nothing was verified. Save "
+                f"your edit to the file (or pass only `path`) so that what passes is what "
+                f"ships.", line=n + 1, file=resolved.name)
+        text = on_disk
+    elif source:
+        text = source
+    else:
+        return "", None, refuse("pass `source` (the C⏚ text) or `path` (a .cg file to read)")
+    data = text.encode("utf-8")
+    verified = {"path": str(resolved) if resolved else None,
+                "sha256": hashlib.sha256(data).hexdigest(),
+                "bytes": len(data), "lines": text.count("\n") + (0 if text.endswith("\n") else 1)}
+    return text, verified, None
+
+
 def _merge_pkg(source: str, package_dir: str | None, extra_files: dict | None) -> dict:
     """Merge same-package siblings (from package_dir) under any explicit
     extra_files, dropping the source's own entity file so it isn't defined twice."""
@@ -2711,8 +2766,8 @@ def install_unknown_tool_guard(server) -> bool:
 # installed, and every tool is directly callable from the tests. build_server()
 # hands this same list to the MCP layer.
 @_tool("parse/scope/type-check a draft; returns diagnostics. Fix these first.")
-def cg_check(source: str, extra_files: dict | None = None,
-             package_dir: str | None = None) -> dict:
+def cg_check(source: str = "", extra_files: dict | None = None,
+             package_dir: str | None = None, path: str | None = None) -> dict:
     """Parse, scope, and type-check C⏚ source without running it. Returns
     {ok, diagnostics:[{file,line,message}], summary}. Call this first on
     any draft; fix every diagnostic before simulating. `extra_files` maps
@@ -2721,14 +2776,23 @@ def cg_check(source: str, extra_files: dict | None = None,
     .cg files, e.g. "fpga/src/main/cg", relative to the project root): the
     tool then reads every sibling .cg there, so tasks defined in other files
     of the same package resolve — just like the IDE. A task you only got from
-    `cg_example` is text; it must be saved to a file in that dir to resolve."""
-    return check(source, extra_files, package_dir)
+    `cg_example` is text; it must be saved to a file in that dir to resolve.
+
+    `path` (F92): name the .cg FILE and the tool reads it itself -- then what is
+    verified is what ships. Pass `path` alone, or with `source` (the two must
+    match, or the call is refused naming the first differing line). Every result
+    carries `verified`: {path, sha256, bytes, lines} of exactly what was checked."""
+    text, verified, refusal = _source_of(source, path)
+    if refusal:
+        return refusal
+    return {**check(text, extra_files, package_dir), "verified": verified}
 
 @_tool("run the design and self-check its `test:` vectors — the correctness gate.")
-def cg_simulate(source: str, extra_files: dict | None = None,
+def cg_simulate(source: str = "", extra_files: dict | None = None,
                 timeout: int = 60, simulator: str = "bytecode",
                 package_dir: str | None = None,
-                report_dir: str | None = "fpga/build") -> dict:
+                report_dir: str | None = "fpga/build",
+                path: str | None = None) -> dict:
     """Simulate C⏚ source. Returns {ok, simulator, timed_out, diagnostics,
     output}. `output` holds port values and print() lines; a
     `properties { test: {...} }` block self-checks and fails the run on
@@ -2746,17 +2810,26 @@ def cg_simulate(source: str, extra_files: dict | None = None,
     compiler -- a `test` property or a `_test` name also work after 3.2.0.
     Call cg_capabilities
     to see which backends this host actually has; do not assume.
+
+    `path` (F92): name the .cg FILE and the tool reads it itself -- then what is
+    verified is what ships. Pass `path` alone, or with `source` (the two must
+    match, or the call is refused naming the first differing line). Every result
+    carries `verified`: {path, sha256, bytes, lines} of exactly what was checked.
     """
-    r = simulate(source, extra_files, timeout, simulator, package_dir)
+    text, verified, refusal = _source_of(source, path)
+    if refusal:
+        return refusal
+    r = {**simulate(text, extra_files, timeout, simulator, package_dir), "verified": verified}
     if report_dir:
         accumulate_report(report_dir, "sim", r)
     return r
 
 @_tool("emit synthesizable Verilog (or VHDL) once the design simulates.")
-def cg_generate_verilog(source: str, target: str = "verilog",
+def cg_generate_verilog(source: str = "", target: str = "verilog",
                         extra_files: dict | None = None,
                         output_dir: str | None = None,
-                        package_dir: str | None = None) -> dict:
+                        package_dir: str | None = None,
+                        path: str | None = None) -> dict:
     """Generate synthesizable HDL from C⏚. target is 'verilog' (default)
     or 'vhdl'. Returns {ok, file_count, files:{path:content}}. Use after
     cg_simulate passes, to hand off RTL.
@@ -2768,8 +2841,16 @@ def cg_generate_verilog(source: str, target: str = "verilog",
     the host needs the .v on disk (to inspect or run yosys).
 
     For a MULTI-FILE project, pass `package_dir` (the folder with your .cg
-    files) so sibling tasks in the same package resolve during generation."""
-    return generate(source, target, extra_files, output_dir, package_dir)
+    files) so sibling tasks in the same package resolve during generation.
+
+    `path` (F92): name the .cg FILE and the tool reads it itself -- then what is
+    verified is what ships. Pass `path` alone, or with `source` (the two must
+    match, or the call is refused naming the first differing line). Every result
+    carries `verified`: {path, sha256, bytes, lines} of exactly what was checked."""
+    text, verified, refusal = _source_of(source, path)
+    if refusal:
+        return refusal
+    return {**generate(text, target, extra_files, output_dir, package_dir), "verified": verified}
 
 @_tool("what this host actually has (jar, simulators, yosys) — probed, not assumed.")
 def cg_capabilities() -> dict:
@@ -2843,7 +2924,7 @@ def cg_example(pattern: str = "", k: int = 1) -> dict:
     return example(pattern, k)
 
 @_tool("static checks for C⏚ that compiles and is still wrong; no jar, instant.")
-def cg_lint(source: str) -> dict:
+def cg_lint(source: str = "", path: str | None = None) -> dict:
     """Fast static checks for C⏚ that COMPILES CLEANLY AND IS STILL WRONG.
     Returns {ok, findings:[{rule, line, severity, message, fix}]}; ok is
     False if any finding is an error.
@@ -2855,8 +2936,16 @@ def cg_lint(source: str) -> dict:
     fixture key that matches no port, and a bool compared against 0/1.
 
     No jar, no simulator, no timeout -- run it on every draft before
-    `cg_check`, and again before you claim a design is verified."""
-    return lint(source)
+    `cg_check`, and again before you claim a design is verified.
+
+    `path` (F92): name the .cg FILE and the tool reads it itself -- then what is
+    verified is what ships. Pass `path` alone, or with `source` (the two must
+    match, or the call is refused naming the first differing line). Every result
+    carries `verified`: {path, sha256, bytes, lines} of exactly what was checked."""
+    text, verified, refusal = _source_of(source, path)
+    if refusal:
+        return refusal
+    return {**lint(text), "verified": verified}
 
 @_tool("map a compiler error to its fix (a hint, and a recipe where there is one).")
 def cg_suggest_for_error(message: str) -> dict:
@@ -2878,10 +2967,11 @@ def cg_suggest_for_error(message: str) -> dict:
     return suggest_for_error(message)
 
 @_tool("yosys-synthesize the Verilog: REAL/FOLDED/SUSPECT verdict + cell count.")
-def cg_synth(source: str, top: str | None = None,
+def cg_synth(source: str = "", top: str | None = None,
              extra_files: dict | None = None, timeout: int = 180,
              flow: str = "generic", package_dir: str | None = None,
-             report_dir: str | None = "fpga/build") -> dict:
+             report_dir: str | None = "fpga/build",
+             path: str | None = None) -> dict:
     """Synthesize the generated Verilog with yosys — the strongest signal
     that a design maps to real hardware (catches non-synthesizable
     constructs that simulate/iverilog accept). Returns {ok, verdict, top,
@@ -2915,8 +3005,16 @@ def cg_synth(source: str, top: str | None = None,
     `report_dir` DEFAULTS to "fpga/build", so each synth automatically records
     THIS kernel's verdict + cell counts as a row in <report_dir>/report.html —
     synthesizing the kernels builds the whole report as a byproduct, no
-    separate step (see cg_report). Pass report_dir="" to disable."""
-    r = synth(source, top, extra_files, timeout, flow, package_dir)
+    separate step (see cg_report). Pass report_dir="" to disable.
+
+    `path` (F92): name the .cg FILE and the tool reads it itself -- then what is
+    verified is what ships. Pass `path` alone, or with `source` (the two must
+    match, or the call is refused naming the first differing line). Every result
+    carries `verified`: {path, sha256, bytes, lines} of exactly what was checked."""
+    text, verified, refusal = _source_of(source, path)
+    if refusal:
+        return refusal
+    r = {**synth(text, top, extra_files, timeout, flow, package_dir), "verified": verified}
     if report_dir:
         accumulate_report(report_dir, "synth", r)
     return r

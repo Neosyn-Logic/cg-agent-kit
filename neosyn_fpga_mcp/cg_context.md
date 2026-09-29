@@ -210,6 +210,12 @@ Two things that bite on a multi-file project:
   `package_dir="fpga/src/main/cg"`, relative to the project root) and the tool
   reads every sibling there — exactly like the IDE. Without it, only the single
   `source` string is compiled and tasks in your other files won't resolve.
+- **Verify the file you will ship, not a copy of it.** Pass **`path`** (the `.cg`
+  file) instead of, or with, `source`: the tool then reads the file itself, and
+  if `source` and the file differ the call is refused at the first differing line.
+  Every result carries `verified: {path, sha256, bytes, lines}` — quote it when you
+  claim a design passes. Fixing a value in the `source` argument without saving it
+  proves nothing about the file.
 
 ---
 

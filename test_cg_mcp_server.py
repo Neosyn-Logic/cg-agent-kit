@@ -2291,5 +2291,125 @@ class TestRosterThroughTheRealServer(unittest.TestCase):
             self.assertIn(t["name"], str(cm.exception))
 
 
+# A design whose test PASSES, and the same file with its expected value broken.
+_F92_GOOD = """package f92;
+task Plus1 {
+    properties { test: { a: [ 3 ], y: [ 4 ] } }
+    in push u8 a;
+    out push u8 y;
+    void loop() { y.write((u8) (a.read() + 1)); }
+}
+"""
+_F92_BAD = _F92_GOOD.replace("y: [ 4 ]", "y: [ 5 ]")
+
+
+class TestVerifyTheFileNotTheArgument(unittest.TestCase):
+    """F92 (devtoolkit-93): a model fixed a number in the ARGUMENT, the second call
+    passed, and the FILE still failed. `path` makes the tool read the file; `path` +
+    `source` must agree; every result says what was verified, by path and sha256."""
+
+    def setUp(self):
+        self.dir = pathlib.Path(tempfile.mkdtemp(prefix="f92-"))
+        self.file = self.dir / "Plus1.cg"
+        self.file.write_text(_F92_GOOD)
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _sha(self, text):
+        return cg.hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    def test_path_alone_is_read_and_echoed(self):
+        r = cg.cg_lint(path=str(self.file))
+        self.assertNotIn("refused", r)
+        self.assertEqual(r["verified"]["path"], str(self.file.resolve()))
+        self.assertEqual(r["verified"]["sha256"], self._sha(_F92_GOOD))
+        self.assertEqual(r["verified"]["lines"], _F92_GOOD.count("\n"))
+
+    def test_source_alone_is_echoed_with_no_path(self):
+        r = cg.cg_lint(source=_F92_GOOD)
+        self.assertIsNone(r["verified"]["path"])
+        self.assertEqual(r["verified"]["sha256"], self._sha(_F92_GOOD))
+
+    def test_matching_source_and_path_agree_despite_line_endings(self):
+        crlf = _F92_GOOD.replace("\n", "\r\n").rstrip("\r\n")
+        r = cg.cg_lint(source=crlf, path=str(self.file))
+        self.assertNotIn("refused", r)
+        # what was verified is the FILE, not the argument
+        self.assertEqual(r["verified"]["sha256"], self._sha(_F92_GOOD))
+
+    def test_differing_source_and_path_are_refused_at_the_first_differing_line(self):
+        r = cg.cg_lint(source=_F92_GOOD, path=str(self.file.parent / "Bad.cg"))
+        self.assertTrue(r.get("refused"))                          # Bad.cg does not exist yet
+        (self.dir / "Bad.cg").write_text(_F92_BAD)
+        r = cg.cg_lint(source=_F92_GOOD, path=str(self.dir / "Bad.cg"))
+        self.assertTrue(r["refused"])
+        self.assertFalse(r["ok"])
+        self.assertIsNone(r["verified"])
+        d = r["diagnostics"][0]
+        self.assertEqual((d["file"], d["line"]), ("Bad.cg", 3))
+        self.assertIn("y: [ 4 ]", d["message"])
+        self.assertIn("y: [ 5 ]", d["message"])
+
+    def test_a_shorter_argument_is_a_difference_too(self):
+        cut = "\n".join(_F92_GOOD.split("\n")[:4])
+        r = cg.cg_lint(source=cut, path=str(self.file))
+        self.assertTrue(r["refused"])
+        self.assertEqual(r["diagnostics"][0]["line"], 5)
+        self.assertIn("<end of text>", r["diagnostics"][0]["message"])
+
+    def test_neither_source_nor_path_is_refused(self):
+        r = cg.cg_lint()
+        self.assertTrue(r["refused"])
+        self.assertIn("`path`", r["summary"])
+
+    def test_a_path_that_is_not_a_cg_file_is_refused(self):
+        other = self.dir / "notes.txt"
+        other.write_text(_F92_GOOD)
+        for p in (str(other), str(self.dir / "Missing.cg"), str(self.dir)):
+            r = cg.cg_lint(path=p)
+            self.assertTrue(r.get("refused"), p)
+
+    def test_a_relative_path_resolves_under_project_root(self):
+        old = os.environ.get("PROJECT_ROOT")
+        os.environ["PROJECT_ROOT"] = str(self.dir)
+        try:
+            r = cg.cg_lint(path="Plus1.cg")
+        finally:
+            if old is None:
+                del os.environ["PROJECT_ROOT"]
+            else:
+                os.environ["PROJECT_ROOT"] = old
+        self.assertEqual(r["verified"]["path"], str(self.file.resolve()))
+
+    def test_every_source_tool_takes_path(self):
+        import inspect as _inspect
+        for fn in (cg.cg_check, cg.cg_simulate, cg.cg_generate_verilog, cg.cg_lint, cg.cg_synth):
+            params = _inspect.signature(fn).parameters
+            self.assertIn("path", params, fn.__name__)
+            self.assertEqual(params["source"].default, "", fn.__name__)
+
+    @unittest.skipUnless(JAR_OK, "needs the compiler jar")
+    def test_check_reads_the_file_and_echoes_it(self):
+        r = cg.cg_check(path=str(self.file))
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(r["verified"]["sha256"], self._sha(_F92_GOOD))
+
+    @unittest.skipUnless(BYTECODE_OK, "needs the bytecode simulator")
+    def test_the_devtoolkit_93_case_a_fixed_argument_cannot_pass_a_broken_file(self):
+        (self.dir / "Plus1.cg").write_text(_F92_BAD)             # the file still fails
+        broken = cg.cg_simulate(path=str(self.file), report_dir="")
+        self.assertFalse(broken["ok"])
+        self.assertEqual(broken["verified"]["sha256"], self._sha(_F92_BAD))
+        # the model "fixes" the number in the argument only: refused, NOT passed
+        r = cg.cg_simulate(source=_F92_GOOD, path=str(self.file), report_dir="")
+        self.assertTrue(r["refused"])
+        self.assertFalse(r["ok"])
+        # text alone still passes -- and says it verified no file
+        r = cg.cg_simulate(source=_F92_GOOD, report_dir="")
+        self.assertTrue(r["ok"], r)
+        self.assertIsNone(r["verified"]["path"])
+
+
 if __name__ == "__main__":
     unittest.main()
