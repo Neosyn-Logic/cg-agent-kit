@@ -2620,5 +2620,44 @@ class TestIverilogVerdictEndToEnd(unittest.TestCase):
         self.assertFalse(r["ok"], r)
         self.assertIn("no assert ever ran", r["verdict"])
 
+
+class TestLintOutputOnlyConstant(unittest.TestCase):
+    """AccelOne F214: a Disparity read both inputs and wrote `dL.write(0); dR.write(0);`. It
+    compiled and cg_check said "compiles cleanly". Narrow on purpose: 0 hits over the 286
+    real .cg files in cg-ip-cores and the example dictionaries."""
+
+    def rules(self, body, head="in push u8 a, b; out push u8 x, y;"):
+        src = f"package p;\ntask T {{ {head}\n  void loop() {{ {body} }} }}\n"
+        return [(f["rule"], f["severity"]) for f in cg.lint(src)["findings"]]
+
+    def test_the_disparity_shape_is_an_error(self):
+        r = cg.lint("package p;\ntask D { in stream u8 L, R; out stream u8 dL, dR;\n"
+                    "  void loop() { u8 l = L.read(); u8 r = R.read();\n"
+                    "    dL.write(0);\n    dR.write(0); } }\n")
+        self.assertFalse(r["ok"])
+        f = r["findings"]
+        self.assertEqual([(x["rule"], x["line"]) for x in f],
+                         [("output-only-constant", 4), ("output-only-constant", 5)])
+        self.assertIn("computes nothing", f[0]["message"])
+
+    def test_casts_and_named_consts_are_constants_too(self):
+        src = ("package p;\nconst u8 ZERO = 0;\ntask T { in push u8 a; out push u8 x, y;\n"
+               "  void loop() { u8 v = a.read(); x.write((u8) 0x0F); y.write(ZERO); } }\n")
+        self.assertEqual({f["rule"] for f in cg.lint(src)["findings"]}, {"output-only-constant"})
+
+    def test_a_computed_output_clears_it(self):
+        self.assertEqual(self.rules("u8 v = a.read(); x.write(v); y.write(0);"), [])
+
+    def test_a_router_is_not_flagged(self):
+        # WHICH port is written under which `if` is the computation (the Bus R1 repro)
+        self.assertEqual(self.rules("u8 v = a.read(); if (v == 0) { x.write(0xAA); } else { y.write(0xBB); }"), [])
+
+    def test_bool_events_are_not_constants(self):
+        self.assertEqual(self.rules("u8 v = a.read(); x.write(true); y.write(false);",
+                                    head="in push u8 a; out push bool x, y;"), [])
+
+    def test_a_driver_with_no_inputs_is_not_flagged(self):
+        self.assertEqual(self.rules("x.write(3); y.write(9);", head="out push u8 x, y;"), [])
+
 if __name__ == "__main__":
     unittest.main()

@@ -2559,9 +2559,82 @@ def lint(source: str) -> dict:
                     f"compare against a bool: `{bm.group(1)}` or "
                     f"`!{bm.group(1)}` (and `^`/`!=` between two bools is fine).")
 
+        # (5) Every output only ever written a constant (AccelOne F214): a model's 132-line
+        # Disparity read both inputs and wrote `dL.write(0); dR.write(0);` -- it compiled,
+        # cg_check said "compiles cleanly", and the model moved on as if the unit existed.
+        # Deliberately narrow, measured over the 286 real .cg files (0 hits after these):
+        #  * only a task WITH inputs -- a test driver writing constants is doing its job;
+        #  * every write unconditional, straight in the function body -- which port is written
+        #    under which `if` is itself the computation (a router writes constants);
+        #  * `true`/`false` do not count -- `done.write(true)` is an event, its timing is
+        #    the data (21 such outputs in the IP cores);
+        #  * EVERY output constant -- one constant flag next to a computed value is normal.
+        if kind == "task" and outs and any(d["dir"] == "in" for d in ports.values()):
+            consts = {m.group(1) for m in re.finditer(
+                r"\bconst\s+[\w<>]+\s+([A-Za-z_]\w*)\s*=", src)}
+            dead = {}
+            for port in sorted(outs):
+                args = _lint_write_args(body, port)
+                if args and all(_lint_is_constant(a, consts) and _lint_unconditional(body, off)
+                                for a, off in args):
+                    dead[port] = (args[0][0].strip(), _lint_line(src, bstart + args[0][1]))
+            if dead and set(dead) == outs:
+                for port, (value, line) in dead.items():
+                    add("output-only-constant", line, "error",
+                        f"task {name}: output `{port}` is only ever written the constant "
+                        f"{value}, and so is every other output -- the task reads its "
+                        f"inputs and computes nothing yet.",
+                        "write the computed value. It compiles, but a design that compiles is "
+                        "not a design that works, and a test of it passes or fails for the "
+                        "wrong reason.")
+
     return {"ok": not any(f["severity"] == "error" for f in findings),
             "findings": findings, "checked": True,
             "entities_checked": [n for _k, n, _s, _e in entities]}
+
+
+def _lint_write_args(body: str, port: str) -> list:
+    """The argument text of every `port.write(...)` in `body`, with its offset."""
+    out = []
+    for m in re.finditer(r"\b" + re.escape(port) + r"\s*\.\s*write\s*\(", body):
+        depth, i = 1, m.end()
+        while i < len(body) and depth:
+            depth += {"(": 1, ")": -1}.get(body[i], 0)
+            i += 1
+        out.append((body[m.end():i - 1], m.start()))
+    return out
+
+
+def _lint_is_constant(arg: str, consts: set) -> bool:
+    """A literal (possibly negated and cast, e.g. `(u8) 0`, `-1`, `0x0F`, `true`) or a const name."""
+    a = arg.strip()
+    while True:                                   # peel casts and redundant parentheses
+        m = re.match(r"^\(\s*(?:[ui]\d+|u?int\s*<[^>]*>|bool)\s*\)\s*(.+)$", a, re.S)
+        if m:
+            a = m.group(1).strip()
+            continue
+        if a.startswith("(") and a.endswith(")") and a.count("(") == 1:
+            a = a[1:-1].strip()
+            continue
+        break
+    a = a.lstrip("-").strip()
+    return bool(re.fullmatch(r"(0[xX][0-9a-fA-F_]+|0[bB][01_]+|\d[\d_]*)[lL]?", a)) or a in consts
+
+
+def _lint_unconditional(body: str, pos: int) -> bool:
+    """Is the statement at `pos` directly in its function's body (not inside an if/else/loop)?"""
+    depth, i = 0, pos
+    while i > 0:
+        i -= 1
+        c = body[i]
+        if c == "}":
+            depth += 1
+        elif c == "{":
+            if depth == 0:
+                head = body[max(0, i - 200):i]
+                return bool(re.search(r"\b(void|[ui]\d+|bool)\s+[A-Za-z_]\w*\s*\([^()]*\)\s*$", head))
+            depth -= 1
+    return False
 
 
 # --------------------------------------------------------- the tool roster
@@ -3052,7 +3125,9 @@ def cg_lint(source: str = "", path: str | None = None) -> dict:
     ACCEPTS. Chiefly: a `test:` fixture that drives inputs but compares no
     output (it passes even with a dead design -- the single most expensive
     failure mode in this codebase), ragged vectors in a sync fixture, a
-    fixture key that matches no port, and a bool compared against 0/1.
+    fixture key that matches no port, a bool compared against 0/1, and a task
+    that reads its inputs but writes only constants to every output (it compiles
+    and computes nothing).
 
     No jar, no simulator, no timeout -- run it on every draft before
     `cg_check`, and again before you claim a design is verified.
