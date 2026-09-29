@@ -2082,10 +2082,13 @@ def _scaffold_stream(name, package, inputs, outputs):
 
 // {name} -- a streaming stage with handshaking ports.   // {FILL}
 //
-// A `push` port carries a handshake: `read()` BLOCKS until a token arrives and
-// `write()` blocks until the consumer can take one. The stage therefore
-// self-synchronizes with its neighbours and back-pressures automatically -- you
-// never hand-write a ready/valid FSM.
+// A `push` port carries a valid signal: `read()` WAITS until a value arrives, but
+// `write()` does NOT wait -- push has no back-pressure, so a value written while
+// the consumer is still busy is LOST (measured on the simulator and in Verilog:
+// a consumer taking one value every 3 cycles saw 1, 5 of 1..8). That is right
+// when the consumer keeps up. If it can be slower than its producer, declare the
+// ports `stream` (valid + ready): then `write()` waits for the consumer and
+// nothing is dropped. Either way you never hand-write the handshake FSM.
 //
 // Pick this shape for a DATAFLOW stage. For a cycle-by-cycle function use the
 // `sync` + vector shape instead (cg_scaffold kind="task"), whose test block
