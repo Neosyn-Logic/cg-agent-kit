@@ -379,7 +379,7 @@ class TestBuildIdentity(unittest.TestCase):
         try:
             fake = subprocess.CompletedProcess([], 0, stdout="Neosyn C? Language Server v9.8.7\n", stderr="")
             with mock.patch.object(cg, "JAR", pathlib.Path(f.name)), \
-                    mock.patch.object(cg, "_JAR_ID", None), \
+                    mock.patch.object(cg, "_JAR_VERSION", {}), \
                     mock.patch.object(cg.subprocess, "run", return_value=fake):
                 jar = cg.jar_identity()
             self.assertEqual(jar["sha256"], hashlib.sha256(b"not really a jar").hexdigest())
@@ -2410,6 +2410,82 @@ class TestVerifyTheFileNotTheArgument(unittest.TestCase):
         self.assertTrue(r["ok"], r)
         self.assertIsNone(r["verified"]["path"])
 
+
+
+class TestJarIdentityEveryCall(unittest.TestCase):
+    """F93 (devtoolkit-93): the jar's identity was LAZY -- the first cg_capabilities call -- and
+    cached for the process, while every call runs `java -jar` on whatever is on disk then. It is
+    now taken at import, re-checked on every call, and a result from a replaced jar says so."""
+
+    def setUp(self):
+        from unittest import mock
+        self.dir = pathlib.Path(tempfile.mkdtemp(prefix="f93-"))
+        self.jar = self.dir / "cg-language-server.jar"
+        self.jar.write_bytes(b"jar one")
+        self.patches = [mock.patch.object(cg, "JAR", self.jar)]
+        for p in self.patches:
+            p.start()
+        start = cg._jar_fingerprint()
+        self.patches += [mock.patch.object(cg, "_JAR_AT_START", start),
+                         mock.patch.object(cg, "_JAR_SEEN", dict(start)),
+                         mock.patch.object(cg, "_JAR_VERSION", {})]
+        for p in self.patches[1:]:
+            p.start()
+
+    def tearDown(self):
+        for p in reversed(self.patches):
+            p.stop()
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _sha(self, b):
+        return cg.hashlib.sha256(b).hexdigest()
+
+    def test_an_unchanged_jar_is_stamped_and_not_flagged(self):
+        r = cg._stamp_jar({"ok": True, "verified": {"path": None}})
+        self.assertEqual(r["verified"]["jar_sha256"], self._sha(b"jar one"))
+        self.assertNotIn("jar_changed", r)
+
+    def test_a_replaced_jar_is_flagged_with_both_hashes(self):
+        self.jar.write_bytes(b"jar number two")                  # rebuilt mid-session
+        r = cg._stamp_jar({"ok": True, "verified": {"path": None}})
+        self.assertEqual(r["verified"]["jar_sha256"], self._sha(b"jar number two"))
+        ch = r["jar_changed"]
+        self.assertEqual(ch["at_start"]["sha256"], self._sha(b"jar one"))
+        self.assertEqual(ch["now"]["sha256"], self._sha(b"jar number two"))
+        self.assertIn("Re-run", ch["message"])
+
+    def test_capabilities_reports_the_jar_on_disk_now_not_the_first_one(self):
+        from unittest import mock
+        fake = subprocess.CompletedProcess([], 0, stdout="Language Server v1.0.0\n", stderr="")
+        with mock.patch.object(cg.subprocess, "run", return_value=fake):
+            first = cg.jar_identity()
+            self.jar.write_bytes(b"jar number two")
+            fake2 = subprocess.CompletedProcess([], 0, stdout="Language Server v2.0.0\n", stderr="")
+            with mock.patch.object(cg.subprocess, "run", return_value=fake2):
+                second = cg.jar_identity()
+        self.assertEqual((first["version"], first["same_as_at_start"]), ("1.0.0", True))
+        self.assertEqual(second["sha256"], self._sha(b"jar number two"))
+        self.assertEqual((second["version"], second["same_as_at_start"]), ("2.0.0", False))
+
+    def test_a_jar_that_disappears_is_flagged(self):
+        self.jar.unlink()
+        r = cg._stamp_jar({"ok": False})
+        self.assertIsNone(r["jar_changed"]["now"]["sha256"])
+
+    def test_an_unchanged_stat_does_not_rehash(self):
+        from unittest import mock
+        with mock.patch.object(cg, "_sha256", side_effect=AssertionError("rehashed")):
+            cg._stamp_jar({})                                     # stat unchanged -> no hash
+
+
+class TestJarIdentityIsTakenAtImport(unittest.TestCase):
+    @unittest.skipUnless(JAR_OK, "needs the compiler jar")
+    def test_the_real_jar_is_fingerprinted_at_import_and_stamped_on_a_check(self):
+        self.assertEqual(cg._JAR_AT_START["path"], str(cg.JAR))
+        self.assertEqual(cg._JAR_AT_START["sha256"], cg._sha256(cg.JAR))
+        r = cg.cg_check(source=_F92_GOOD)
+        self.assertEqual(r["verified"]["jar_sha256"], cg._sha256(cg.JAR))
+        self.assertNotIn("jar_changed", r)
 
 if __name__ == "__main__":
     unittest.main()

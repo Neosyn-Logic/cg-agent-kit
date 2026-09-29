@@ -463,24 +463,79 @@ def _kit_fingerprint() -> dict:
 
 
 _KIT = _kit_fingerprint()
-_JAR_ID = None
+
+
+def _jar_fingerprint() -> dict:
+    """The jar on disk NOW: path, sha256, and the stat that says when to hash it again."""
+    try:
+        st = JAR.stat()
+        return {"path": str(JAR), "sha256": _sha256(JAR),
+                "size": st.st_size, "mtime_ns": st.st_mtime_ns}
+    except OSError:
+        return {"path": str(JAR), "sha256": None, "size": None, "mtime_ns": None}
+
+
+# F93 (devtoolkit-93): the identity was LAZY -- computed at the first cg_capabilities call and
+# cached for the process -- while every tool call runs `java -jar` on whatever is on disk then.
+# A jar rebuilt or replaced mid-session ran unreported, and capabilities kept quoting the old
+# hash. The jar is fingerprinted at import, re-checked (by stat, hashed only when that moves)
+# on every call, and a result that ran on a different jar says so.
+_JAR_AT_START = _jar_fingerprint()
+_JAR_SEEN = dict(_JAR_AT_START)
+_JAR_VERSION: dict = {}                                         # sha256 -> reported version
+
+
+def _jar_now() -> dict:
+    """The current jar's fingerprint, rehashing only when its path or stat changed."""
+    global _JAR_SEEN
+    try:
+        st = JAR.stat()
+        same = (str(JAR) == _JAR_SEEN["path"] and st.st_size == _JAR_SEEN["size"]
+                and st.st_mtime_ns == _JAR_SEEN["mtime_ns"])
+    except OSError:
+        same = _JAR_SEEN["sha256"] is None and str(JAR) == _JAR_SEEN["path"]
+    if not same:
+        _JAR_SEEN = _jar_fingerprint()
+    return _JAR_SEEN
+
+
+def _stamp_jar(result: dict) -> dict:
+    """Record which jar produced `result`; flag it when that is not the jar the kit started with."""
+    now = _jar_now()
+    if isinstance(result.get("verified"), dict):
+        result["verified"]["jar_sha256"] = now["sha256"]
+    if (now["path"], now["sha256"]) != (_JAR_AT_START["path"], _JAR_AT_START["sha256"]):
+        result["jar_changed"] = {
+            "at_start": {"path": _JAR_AT_START["path"], "sha256": _JAR_AT_START["sha256"]},
+            "now": {"path": now["path"], "sha256": now["sha256"]},
+            "message": ("The compiler jar changed after this kit started: this result came from "
+                        "the jar on disk NOW, and earlier results may have come from the old one. "
+                        "Re-run anything you verified before the change, and call "
+                        "cg_capabilities to see which build is installed."),
+        }
+    return result
 
 
 def jar_identity() -> dict:
-    """Which compiler jar: path, sha256 and the version it reports. Cached for the process."""
-    global _JAR_ID
-    if _JAR_ID is None:
-        ident = {"path": str(JAR), "sha256": _sha256(JAR) if JAR.is_file() else None, "version": None}
-        if JAR.is_file():
-            try:
-                p = subprocess.run(["java", "-jar", str(JAR), "--version"], env=ENV, timeout=60,
-                                   capture_output=True, text=True, errors="replace")
-                m = re.search(r"\bv(\d+\.\d+\.\d+\S*)", (p.stdout or "") + (p.stderr or ""))
-                ident["version"] = m.group(1) if m else None
-            except Exception:                                   # pragma: no cover
-                pass
-        _JAR_ID = ident
-    return _JAR_ID
+    """Which compiler jar: path, sha256 and the version it reports -- of the jar on disk now.
+    The version is asked once per jar hash (it starts a JVM)."""
+    now = _jar_now()
+    ident = {"path": now["path"], "sha256": now["sha256"], "version": None,
+             "same_as_at_start": now["sha256"] == _JAR_AT_START["sha256"]}
+    if now["sha256"] is None:
+        return ident
+    if now["sha256"] not in _JAR_VERSION:
+        version = None
+        try:
+            p = subprocess.run(["java", "-jar", str(JAR), "--version"], env=ENV, timeout=60,
+                               capture_output=True, text=True, errors="replace")
+            m = re.search(r"\bv(\d+\.\d+\.\d+\S*)", (p.stdout or "") + (p.stderr or ""))
+            version = m.group(1) if m else None
+        except Exception:                                       # pragma: no cover
+            pass
+        _JAR_VERSION[now["sha256"]] = version
+    ident["version"] = _JAR_VERSION[now["sha256"]]
+    return ident
 
 
 def capabilities() -> dict:
@@ -2781,11 +2836,13 @@ def cg_check(source: str = "", extra_files: dict | None = None,
     `path` (F92): name the .cg FILE and the tool reads it itself -- then what is
     verified is what ships. Pass `path` alone, or with `source` (the two must
     match, or the call is refused naming the first differing line). Every result
-    carries `verified`: {path, sha256, bytes, lines} of exactly what was checked."""
+    carries `verified`: {path, sha256, bytes, lines} of exactly what was checked
+    (+ `jar_sha256` when the compiler ran; `jar_changed` if that jar was replaced
+    after the kit started -- re-run what you verified before the change)."""
     text, verified, refusal = _source_of(source, path)
     if refusal:
         return refusal
-    return {**check(text, extra_files, package_dir), "verified": verified}
+    return _stamp_jar({**check(text, extra_files, package_dir), "verified": verified})
 
 @_tool("run the design and self-check its `test:` vectors — the correctness gate.")
 def cg_simulate(source: str = "", extra_files: dict | None = None,
@@ -2814,12 +2871,14 @@ def cg_simulate(source: str = "", extra_files: dict | None = None,
     `path` (F92): name the .cg FILE and the tool reads it itself -- then what is
     verified is what ships. Pass `path` alone, or with `source` (the two must
     match, or the call is refused naming the first differing line). Every result
-    carries `verified`: {path, sha256, bytes, lines} of exactly what was checked.
+    carries `verified`: {path, sha256, bytes, lines} of exactly what was checked
+    (+ `jar_sha256` when the compiler ran; `jar_changed` if that jar was replaced
+    after the kit started -- re-run what you verified before the change).
     """
     text, verified, refusal = _source_of(source, path)
     if refusal:
         return refusal
-    r = {**simulate(text, extra_files, timeout, simulator, package_dir), "verified": verified}
+    r = _stamp_jar({**simulate(text, extra_files, timeout, simulator, package_dir), "verified": verified})
     if report_dir:
         accumulate_report(report_dir, "sim", r)
     return r
@@ -2846,11 +2905,13 @@ def cg_generate_verilog(source: str = "", target: str = "verilog",
     `path` (F92): name the .cg FILE and the tool reads it itself -- then what is
     verified is what ships. Pass `path` alone, or with `source` (the two must
     match, or the call is refused naming the first differing line). Every result
-    carries `verified`: {path, sha256, bytes, lines} of exactly what was checked."""
+    carries `verified`: {path, sha256, bytes, lines} of exactly what was checked
+    (+ `jar_sha256` when the compiler ran; `jar_changed` if that jar was replaced
+    after the kit started -- re-run what you verified before the change)."""
     text, verified, refusal = _source_of(source, path)
     if refusal:
         return refusal
-    return {**generate(text, target, extra_files, output_dir, package_dir), "verified": verified}
+    return _stamp_jar({**generate(text, target, extra_files, output_dir, package_dir), "verified": verified})
 
 @_tool("what this host actually has (jar, simulators, yosys) — probed, not assumed.")
 def cg_capabilities() -> dict:
@@ -2941,7 +3002,9 @@ def cg_lint(source: str = "", path: str | None = None) -> dict:
     `path` (F92): name the .cg FILE and the tool reads it itself -- then what is
     verified is what ships. Pass `path` alone, or with `source` (the two must
     match, or the call is refused naming the first differing line). Every result
-    carries `verified`: {path, sha256, bytes, lines} of exactly what was checked."""
+    carries `verified`: {path, sha256, bytes, lines} of exactly what was checked
+    (+ `jar_sha256` when the compiler ran; `jar_changed` if that jar was replaced
+    after the kit started -- re-run what you verified before the change)."""
     text, verified, refusal = _source_of(source, path)
     if refusal:
         return refusal
@@ -3010,11 +3073,13 @@ def cg_synth(source: str = "", top: str | None = None,
     `path` (F92): name the .cg FILE and the tool reads it itself -- then what is
     verified is what ships. Pass `path` alone, or with `source` (the two must
     match, or the call is refused naming the first differing line). Every result
-    carries `verified`: {path, sha256, bytes, lines} of exactly what was checked."""
+    carries `verified`: {path, sha256, bytes, lines} of exactly what was checked
+    (+ `jar_sha256` when the compiler ran; `jar_changed` if that jar was replaced
+    after the kit started -- re-run what you verified before the change)."""
     text, verified, refusal = _source_of(source, path)
     if refusal:
         return refusal
-    r = {**synth(text, top, extra_files, timeout, flow, package_dir), "verified": verified}
+    r = _stamp_jar({**synth(text, top, extra_files, timeout, flow, package_dir), "verified": verified})
     if report_dir:
         accumulate_report(report_dir, "synth", r)
     return r
