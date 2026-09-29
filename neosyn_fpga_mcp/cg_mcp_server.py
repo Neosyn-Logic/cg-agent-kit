@@ -973,6 +973,16 @@ def generate(source: str, target: str = "verilog",
         # to it — none can be an unrelated-file false positive.
         result = {"ok": rc == 0 and bool(rel) and not diags, "diagnostics": diags,
                   "file_count": len(rel)}
+        std = [p for p in rel if re.search(r"(^|/)std/", p)]
+        if std:
+            # devtoolkit-40 #11 / founder 2026-09-29: the standard-library files the compiler
+            # copies into the output are (c) Neosyn, as their header says. Say it where the
+            # user gets them, so nobody commits them to a public repository unknowingly.
+            result["notice"] = (
+                f"{len(std)} file(s) under std/ ({', '.join(sorted({p.split('std/')[1].split('/')[0] for p in std}))}) "
+                "are the Neosyn standard library, (c) Neosyn: you may use them in your design "
+                "under your Neosyn licence, but not redistribute them publicly (e.g. do not "
+                "commit them to a public repository). Your own design's files are separate.")
         if persist:
             # Files are kept on disk for the host, so return PATHS + the top module —
             # NOT the full HDL bodies. Returning every .v's contents floods the model's

@@ -2659,5 +2659,18 @@ class TestLintOutputOnlyConstant(unittest.TestCase):
     def test_a_driver_with_no_inputs_is_not_flagged(self):
         self.assertEqual(self.rules("x.write(3); y.write(9);", head="out push u8 x, y;"), [])
 
+
+@unittest.skipUnless(JAR_OK, "needs the compiler jar")
+class TestStdLibraryNotice(unittest.TestCase):
+    """devtoolkit-40 #11: generated output carries (c) Neosyn standard-library files; a user who
+    commits them publicly breaches their licence without knowing. generate says so."""
+
+    def test_generate_names_the_std_files_and_their_terms(self):
+        r = cg.generate("package p;\ntask A { in push u8 a; out push u8 y; void loop() { y.write(a.read()); } }\n")
+        if not any("std/" in p for p in r.get("files", {})):
+            self.skipTest("this compiler emits no std/ files")
+        self.assertIn("(c) Neosyn", r["notice"])
+        self.assertIn("not redistribute them publicly", r["notice"])
+
 if __name__ == "__main__":
     unittest.main()
