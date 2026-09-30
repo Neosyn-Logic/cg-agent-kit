@@ -2708,7 +2708,8 @@ class TestLintOutputOnlyConstant(unittest.TestCase):
 
     def rules(self, body, head="in push u8 a, b; out push u8 x, y;"):
         src = f"package p;\ntask T {{ {head}\n  void loop() {{ {body} }} }}\n"
-        return [(f["rule"], f["severity"]) for f in cg.lint(src)["findings"]]
+        return [(f["rule"], f["severity"]) for f in cg.lint(src)["findings"]
+                if f["rule"] != "input-never-read"]      # its own class below
 
     def test_the_disparity_shape_is_an_error(self):
         r = cg.lint("package p;\ntask D { in stream u8 L, R; out stream u8 dL, dR;\n"
@@ -2738,6 +2739,36 @@ class TestLintOutputOnlyConstant(unittest.TestCase):
 
     def test_a_driver_with_no_inputs_is_not_flagged(self):
         self.assertEqual(self.rules("x.write(3); y.write(9);", head="out push u8 x, y;"), [])
+
+
+class TestLintInputNeverRead(unittest.TestCase):
+    """TRAPS T134 (AccelOne 2026-09-30): a skeleton task declaring `in stream u8 pin;` with an
+    empty loop compiled, and `simulate` crashed on it. Measured over the 236 real .cg files in
+    cg-ip-cores and the examples: 3 hits, all genuinely unread (Sobel's zero-weight centre
+    pixel, I2C's documented-unused scl_in, one bus slave)."""
+
+    def found(self, src):
+        return [(f["rule"], f["severity"], f["line"]) for f in cg.lint(src)["findings"]
+                if f["rule"] == "input-never-read"]
+
+    def test_the_skeleton_is_flagged_as_a_warning(self):
+        src = "package p;\ntask U {\n  in stream u8 pin;\n  out stream u8 pout;\n  void loop() { } }\n"
+        self.assertEqual(self.found(src), [("input-never-read", "warning", 3)])
+        self.assertTrue(cg.lint(src)["ok"], "a warning must not fail the lint")
+
+    def test_a_bare_port_read_by_name_is_a_use(self):
+        src = ("package p;\ntask K { in u8 p00, p01; out u8 g;\n"
+               "  void loop() { g.write((u8) (-(i15) p00 + (i15) p01)); } }\n")
+        self.assertEqual(self.found(src), [])
+
+    def test_a_method_call_is_a_use(self):
+        src = "package p;\ntask R { in stream u8 a; out stream u8 y;\n  void loop() { if (a.available()) { y.write(a.read()); } } }\n"
+        self.assertEqual(self.found(src), [])
+
+    def test_a_comment_is_not_a_use(self):
+        src = ("package p;\ntask M { in bool scl_in; out bool scl_out;\n"
+               "  // never waits for scl_in to rise\n  void loop() { scl_out.write(true); } }\n")
+        self.assertEqual([r for r, _s, _l in self.found(src)], ["input-never-read"])
 
 
 @unittest.skipUnless(JAR_OK, "needs the compiler jar")

@@ -2678,6 +2678,26 @@ def lint(source: str) -> dict:
                         "not a design that works, and a test of it passes or fails for the "
                         "wrong reason.")
 
+        # (6) An input the task never touches (TRAPS T134, AccelOne 2026-09-30): the skeleton a
+        # model writes first -- `in stream u8 pin; ... void loop() { }` -- compiles, and until
+        # studio fixed it, `simulate` crashed on it with NoSuchFieldError. Even fixed, a `stream`
+        # input nobody reads never takes a value, so its producer stalls for good. A warning, not
+        # an error: a skeleton is a legitimate step. ANY mention outside the declaration is a
+        # use -- a bare port is read by its plain name (`-(i15) p00`, `if (eu_pending)`), so
+        # matching only `pin.read()` flagged 28 real inputs across 236 files.
+        if kind == "task":
+            code = re.sub(r"/\*.*?\*/|//[^\n]*", " ", body, flags=re.S)
+            for port, d in sorted(ports.items()):
+                if d.get("dir") != "in":
+                    continue
+                if len(re.findall(r"\b" + re.escape(port) + r"\b", code)) < 2:
+                    decl = re.search(r"\b" + re.escape(port) + r"\b", body)
+                    add("input-never-read",
+                        _lint_line(src, bstart + (decl.start() if decl else 0)), "warning",
+                        f"task {name}: input `{port}` is never read.",
+                        f"read it (`{port}.read()`) or remove it. A `stream` input nobody reads "
+                        "never takes a value, so whatever feeds it stalls for good.")
+
     return {"ok": not any(f["severity"] == "error" for f in findings),
             "findings": findings, "checked": True,
             "entities_checked": [n for _k, n, _s, _e in entities]}
