@@ -21,6 +21,15 @@ shifter for runtime shifts, `u(N+1)` widening for unsigned compares, sub-word
 load/store, count-prefixed boot-stream program loading, lossless-capture
 testbenches); read it before building a processor, decoder, datapath, or stack
 machine.
+## Work in baby steps (read this first)
+
+Work in BABY STEPS -- this is how C⏚ designs get finished. Never write a whole design in one reply:
+a reply that tries is cut off by the output limit and leaves nothing that compiles.
+1. Interface first: the ports and an empty loop (`cg_scaffold`), then `cg_check`.
+2. One task at a time, about 40 lines at most, `cg_check` after each.
+3. `cg_simulate` as soon as a piece can be tested; only then write the next piece.
+4. When a check fails, fix ONLY the reported line and check again -- do not rewrite the file.
+
 **Do not start from a blank file.** Call `cg_scaffold(kind=...)` first: it
 returns a complete skeleton that ALREADY COMPILES and whose self-test ALREADY
 PASSES, with the datapath left as `>>> FILL IN` markers (their line numbers come
@@ -538,10 +547,13 @@ the sim log. A passing `cg_simulate` (ok: true) means the asserts held.
 
 ## Your workflow
 
-1. Draft the C⏚, starting with `package`.
-2. `cg_check` → fix every diagnostic (each is `{file, line, message}`).
-3. `cg_simulate` → confirm `ok: true` and the `output` matches intent; if it
-   times out, suspect gotcha #2.
+Baby steps, always: each step below is a SMALL change followed by a check.
+
+1. `cg_scaffold` (or the interface alone: `package`, ports, an empty loop) → `cg_check`.
+2. Add ONE task or ONE piece of datapath (about 40 lines at most) → `cg_check` → fix only
+   the lines reported (each diagnostic is `{file, line, message}`).
+3. `cg_simulate` as soon as that piece can be tested → confirm `ok: true` and the `output`
+   matches intent; if it times out, suspect gotcha #2. Then repeat 2–3 for the next piece.
 4. `cg_fsm` / `cg_graph` if you need to confirm state count or wiring.
 5. `cg_generate_verilog` once it simulates, to hand off RTL.
 6. `cg_synth` to confirm the Verilog synthesizes (`ok: true`, sensible `cells`,

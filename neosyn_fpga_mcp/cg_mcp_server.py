@@ -3061,10 +3061,13 @@ def install_unknown_tool_guard(server) -> bool:
 # before any server exists — the roster is then available with no `mcp` package
 # installed, and every tool is directly callable from the tests. build_server()
 # hands this same list to the MCP layer.
-@_tool("parse/scope/type-check a draft; returns diagnostics. Fix these first.")
+@_tool("type-check a draft. Check after EVERY small step (~40 lines); fix only reported lines.")
 def cg_check(source: str = "", extra_files: dict | None = None,
              package_dir: str | None = None, path: str | None = None) -> dict:
-    """Parse, scope, and type-check C⏚ source without running it. Returns
+    """BABY STEPS: check after every small change (one task, about 40 lines); fix only the lines it
+    reports, never rewrite the file.
+
+    Parse, scope, and type-check C⏚ source without running it. Returns
     {ok, diagnostics:[{file,line,message}], summary}. Call this first on
     any draft; fix every diagnostic before simulating. `extra_files` maps
     filename → content for imported bundles/tasks (e.g. {"Defs.cg": "..."}).
@@ -3085,13 +3088,15 @@ def cg_check(source: str = "", extra_files: dict | None = None,
         return refusal
     return _stamp_jar({**check(text, extra_files, package_dir), "verified": verified})
 
-@_tool("run the design and self-check its `test:` vectors — the correctness gate.")
+@_tool("run and self-check the `test:` vectors; simulate each piece before writing the next.")
 def cg_simulate(source: str = "", extra_files: dict | None = None,
                 timeout: int = 60, simulator: str = "bytecode",
                 package_dir: str | None = None,
                 report_dir: str | None = "fpga/build",
                 path: str | None = None) -> dict:
-    """Simulate C⏚ source. Returns {ok, simulator, timed_out, diagnostics,
+    """BABY STEPS: simulate each piece as soon as it can be tested, before writing the next.
+
+    Simulate C⏚ source. Returns {ok, simulator, timed_out, diagnostics,
     output}. `output` holds port values and print() lines; a
     `properties { test: {...} }` block self-checks and fails the run on
     mismatch. This is the ground-truth correctness check — iterate until
@@ -3176,12 +3181,13 @@ def cg_capabilities() -> dict:
     written from what was actually found here."""
     return capabilities()
 
-@_tool("a compiling, self-checking skeleton to fill in; START HERE from a blank file.")
+@_tool("START HERE: a compiling, self-checking skeleton; fill ONE hole at a time, check each.")
 def cg_scaffold(kind: str = "task", name: str = "Foo",
                 package: str = "com.example",
                 inputs: list | None = None, outputs: list | None = None,
                 verify: bool = True) -> dict:
-    """START HERE when writing new C⏚ from a blank file. Returns a COMPLETE,
+    """START HERE when writing new C⏚ from a blank file, then work in BABY STEPS: fill ONE hole,
+    cg_check, cg_simulate, and only then the next hole. Returns a COMPLETE,
     COMPILING, SELF-CHECKING skeleton with the datapath left as marked holes
     — you fill in the holes instead of inferring the file skeleton, the port
     syntax and the test-harness shape at the same time.
@@ -3390,6 +3396,14 @@ def cg_docs(topic: str = "", section: str = "") -> dict:
     return docs(topic, section)
 
 
+
+BABY_STEPS = """Work in BABY STEPS -- this is how C⏚ designs get finished. Never write a whole design in one reply:
+a reply that tries is cut off by the output limit and leaves nothing that compiles.
+1. Interface first: the ports and an empty loop (`cg_scaffold`), then `cg_check`.
+2. One task at a time, about 40 lines at most, `cg_check` after each.
+3. `cg_simulate` as soon as a piece can be tested; only then write the next piece.
+4. When a check fails, fix ONLY the reported line and check again -- do not rewrite the file."""
+
 def build_server():
     # `mcp` 2.0 renamed FastMCP -> MCPServer and moved it out of
     # mcp.server.fastmcp, which no longer exists there. requirements.txt says
@@ -3403,7 +3417,13 @@ def build_server():
 
     global _SERVING
     _SERVING = True
-    mcp = _Server("cg")
+    # The workflow the model should follow, sent at connect time (MCP `instructions`): AccelOne's
+    # 2026-09-30 before/after lost 12 of 18 turns to a model writing the whole design in one reply
+    # and hitting the output limit. An MCP package without the parameter still starts.
+    try:
+        mcp = _Server("cg", instructions=BABY_STEPS)
+    except TypeError:                                            # pragma: no cover
+        mcp = _Server("cg")
     # Registration reads the registry, so the tools the server EXPOSES and the
     # roster it PUSHES are the same list by construction and cannot drift apart.
     # The tool functions themselves are module-level (above), which also makes

@@ -2741,6 +2741,30 @@ class TestLintOutputOnlyConstant(unittest.TestCase):
         self.assertEqual(self.rules("x.write(3); y.write(9);", head="out push u8 x, y;"), [])
 
 
+class TestBabySteps(unittest.TestCase):
+    """Founder 2026-09-30, from AccelOne's before/after: 12 of 18 turns were cut off because the model
+    wrote the whole design in one reply. The kit tells the model to work in baby steps -- in the
+    context pack, in the MCP server's connect-time instructions, and on the tools it calls most."""
+
+    def test_the_context_pack_opens_with_it(self):
+        ctx = (cg._HERE / "cg_context.md").read_text()
+        self.assertIn("## Work in baby steps", ctx)
+        self.assertLess(ctx.index("## Work in baby steps"), ctx.index("## The mental model"),
+                        "it must come before the language reference, not after it")
+        self.assertIn("fix ONLY the reported line", ctx)
+
+    def test_the_server_sends_it_at_connect_time(self):
+        self.assertIn("BABY STEPS", cg.BABY_STEPS)
+        self.assertIn("Never write a whole design in one reply", cg.BABY_STEPS)
+
+    def test_the_most_used_tools_say_it(self):
+        # the MCP description is built from the DOCSTRING; the summary is the roster line
+        for fn in (cg.cg_check, cg.cg_simulate, cg.cg_scaffold):
+            self.assertTrue(fn.__doc__.lstrip().startswith(("BABY STEPS", "START HERE")), fn.__name__)
+            self.assertIn("BABY STEPS", fn.__doc__, fn.__name__)
+            self.assertRegex(fn._cg_summary, r"EVERY small step|each piece|ONE hole", fn.__name__)
+
+
 class TestLintInputNeverRead(unittest.TestCase):
     """TRAPS T134 (AccelOne 2026-09-30): a skeleton task declaring `in stream u8 pin;` with an
     empty loop compiled, and `simulate` crashed on it. Measured over the 236 real .cg files in
