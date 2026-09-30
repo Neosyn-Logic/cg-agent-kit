@@ -516,6 +516,26 @@ def _stamp_jar(result: dict) -> dict:
     return result
 
 
+_JAR_TOP: dict = {}                                             # sha256 -> knows `generate --top`
+
+
+def _jar_knows_top() -> bool:
+    """Does the jar on disk accept `generate --top <entity>` (studio 31b07f2, after 3.4.0)?
+    An older jar SKIPS an option it does not know and emits every entity, so the kit asks
+    its `help` (licence-exempt, no compile) once per jar hash rather than trusting the flag."""
+    now = _jar_now()
+    if now["sha256"] is None:
+        return False
+    if now["sha256"] not in _JAR_TOP:
+        try:
+            p = subprocess.run(["java", "-jar", str(JAR), "help"], env=ENV, timeout=60,
+                               capture_output=True, text=True, errors="replace")
+            _JAR_TOP[now["sha256"]] = "--top <entity>" in (p.stdout or "") + (p.stderr or "")
+        except Exception:                                       # pragma: no cover
+            _JAR_TOP[now["sha256"]] = False
+    return _JAR_TOP[now["sha256"]]
+
+
 def jar_identity() -> dict:
     """Which compiler jar: path, sha256 and the version it reports -- of the jar on disk now.
     The version is asked once per jar hash (it starts a JVM)."""
@@ -935,8 +955,12 @@ def _simulate_iverilog(source: str, extra_files: dict | None, timeout: int) -> d
 def generate(source: str, target: str = "verilog",
              extra_files: dict | None = None,
              output_dir: str | None = None,
-             package_dir: str | None = None) -> dict:
+             package_dir: str | None = None,
+             top: str | None = None) -> dict:
     """Emit HDL. Returns the generated files {relative_path: content}.
+
+    `top` (entity name, simple or qualified) emits only that entity and what it
+    instantiates; without it every entity of the source and package is emitted.
 
     If `output_dir` is given the files are WRITTEN THERE AND KEPT (so the
     host can see them on disk, run yosys, commit, etc.); a relative path is
@@ -946,6 +970,18 @@ def generate(source: str, target: str = "verilog",
     if target not in ("verilog", "vhdl"):
         return _with_roster({"ok": False,
                              "error": "target must be 'verilog' or 'vhdl'"})
+    if top is not None:
+        if not re.fullmatch(r"[A-Za-z_]\w*(\.[A-Za-z_]\w*)*", top):
+            return _with_roster({"ok": False,
+                                 "error": f"top must be an entity name (simple or qualified), got {top!r}"})
+        if not _jar_knows_top():
+            # Refuse rather than fall back: an old jar would silently emit EVERY entity,
+            # and the caller asked for one.
+            return _with_roster({"ok": False, "stage": "generate",
+                                 "error": ("this compiler jar does not support `top` (added after "
+                                           "3.4.0). Call again without `top` to get every entity, "
+                                           "or install a newer Neosyn build; cg_capabilities "
+                                           "shows the jar in use.")})
     extra_files = _merge_pkg(source, package_dir, extra_files)
     persist = output_dir is not None
     if persist:
@@ -960,7 +996,8 @@ def generate(source: str, target: str = "verilog",
         out_dir = Path(tempfile.mkdtemp(prefix="cg_mcp_out_"))
     try:
         rc, out, _, _ = _run("generate", source,
-                             flags=["--target", target, "--output", str(out_dir)],
+                             flags=["--target", target, "--output", str(out_dir)]
+                                   + (["--top", top] if top else []),
                              extra_files=extra_files)
         diags = _diagnostics(out)
         ext = ".v" if target == "verilog" else ".vhd"
@@ -973,6 +1010,11 @@ def generate(source: str, target: str = "verilog",
         # to it — none can be an unrelated-file false positive.
         result = {"ok": rc == 0 and bool(rel) and not diags, "diagnostics": diags,
                   "file_count": len(rel)}
+        refused = re.search(r"^Error: (.+)$", out, re.M)
+        if rc != 0 and refused and not diags:
+            # e.g. an unknown `top`: the jar names the entities there are -- pass that on,
+            # not a bare ok:False with no reason.
+            result["error"] = refused.group(1).strip()
         std = [p for p in rel if re.search(r"(^|/)std/", p)]
         if std:
             # devtoolkit-40 #11 / founder 2026-09-29: the standard-library files the compiler
@@ -989,15 +1031,15 @@ def generate(source: str, target: str = "verilog",
             # context (20k+ tokens on a multi-module design) and triggers overshoot/
             # thrash; the model can `read` any file it actually needs.
             written = [str(out_dir / p) for p in rel]
-            top = _synth_top(source)
+            top_module = top.split(".")[-1] if top else _synth_top(source)
             result["output_dir"] = str(out_dir)
             result["written"] = written
-            result["top_module"] = top
+            result["top_module"] = top_module
             # A loud, unmissable location note. A non-fatal diagnostic on ONE entity
             # still emits .v for the clean ones (ok is False but the files exist) —
             # without this the model distrusts the result and starts searching the tree.
             note = (f"Generated {len(rel)} Verilog file(s) on disk under {out_dir} "
-                    f"(top module {top}.v). Exact paths are in 'written' — read them "
+                    f"(top module {top_module}.v). Exact paths are in 'written' — read them "
                     f"from there; do NOT search the project tree for them.")
             if diags:
                 bad = sorted({d.get("file") for d in diags if d.get("file")})
@@ -3067,7 +3109,8 @@ def cg_generate_verilog(source: str = "", target: str = "verilog",
                         extra_files: dict | None = None,
                         output_dir: str | None = None,
                         package_dir: str | None = None,
-                        path: str | None = None) -> dict:
+                        path: str | None = None,
+                        top: str | None = None) -> dict:
     """Generate synthesizable HDL from C⏚. target is 'verilog' (default)
     or 'vhdl'. Returns {ok, file_count, files:{path:content}}. Use after
     cg_simulate passes, to hand off RTL.
@@ -3081,6 +3124,12 @@ def cg_generate_verilog(source: str = "", target: str = "verilog",
     For a MULTI-FILE project, pass `package_dir` (the folder with your .cg
     files) so sibling tasks in the same package resolve during generation.
 
+    Pass `top` (an entity name) to emit only that entity and the modules it
+    instantiates -- e.g. one design out of a package, without its testbenches
+    and siblings. An unknown name is refused with the list of entities. Needs a
+    compiler newer than 3.4.0; an older jar is refused rather than silently
+    emitting everything.
+
     `path` (F92): name the .cg FILE and the tool reads it itself -- then what is
     verified is what ships. Pass `path` alone, or with `source` (the two must
     match, or the call is refused naming the first differing line). Every result
@@ -3090,7 +3139,8 @@ def cg_generate_verilog(source: str = "", target: str = "verilog",
     text, verified, refusal = _source_of(source, path)
     if refusal:
         return refusal
-    return _stamp_jar({**generate(text, target, extra_files, output_dir, package_dir), "verified": verified})
+    return _stamp_jar({**generate(text, target, extra_files, output_dir, package_dir, top),
+                       "verified": verified})
 
 @_tool("what this host actually has (jar, simulators, yosys) — probed, not assumed.")
 def cg_capabilities() -> dict:

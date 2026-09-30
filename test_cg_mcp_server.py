@@ -26,6 +26,7 @@ import tempfile
 import pathlib
 import shutil
 import unittest
+from unittest import mock
 
 from neosyn_fpga_mcp import cg_mcp_server as cg
 
@@ -1307,6 +1308,80 @@ class TestGenerateOk(unittest.TestCase):
         # the div-by-variable diagnostic must auto-attach a recipe suggestion
         self.assertIn("suggestion", r, r)
         self.assertEqual(r["suggestion"]["recipe"], "Recip")
+
+
+_TWO_TASKS = ("package tp;\n"
+              "task Inc { in push u8 a; out push u8 b; void loop() { b.write(a.read()); } }\n"
+              "task Dec { in push u8 a; out push u8 b; void loop() { b.write(a.read()); } }\n")
+
+
+class TestGenerateTopRefusals(unittest.TestCase):
+    """`top` must never degrade silently: an old jar SKIPS an option it does not know and would
+    emit every entity. No jar needed -- the probe is mocked."""
+
+    def test_old_jar_refused_before_running(self):
+        with mock.patch.object(cg, "_jar_knows_top", return_value=False), \
+                mock.patch.object(cg, "_run", side_effect=AssertionError("must not run")):
+            r = cg.generate(_TWO_TASKS, top="Inc")
+        self.assertFalse(r["ok"], r)
+        self.assertIn("does not support `top`", r["error"])
+
+    def test_bad_name_refused(self):
+        with mock.patch.object(cg, "_run", side_effect=AssertionError("must not run")):
+            r = cg.generate(_TWO_TASKS, top="Inc; rm -rf")
+        self.assertFalse(r["ok"], r)
+        self.assertIn("entity name", r["error"])
+
+    def test_probe_reads_help_once_per_jar(self):
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, stdout="  --top <entity>      Emit only", stderr="")
+        with mock.patch.object(cg, "_jar_now", return_value={"sha256": "aa"}), \
+                mock.patch.object(cg, "_JAR_TOP", {}), \
+                mock.patch.object(cg.subprocess, "run", side_effect=fake_run):
+            self.assertTrue(cg._jar_knows_top())
+            self.assertTrue(cg._jar_knows_top())
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][-1], "help")
+
+    def test_probe_false_without_the_option(self):
+        done = subprocess.CompletedProcess([], 0, stdout="  --output <dir>   Output directory", stderr="")
+        with mock.patch.object(cg, "_jar_now", return_value={"sha256": "bb"}), \
+                mock.patch.object(cg, "_JAR_TOP", {}), \
+                mock.patch.object(cg.subprocess, "run", return_value=done):
+            self.assertFalse(cg._jar_knows_top())
+
+
+@unittest.skipUnless(JAR_OK, "compiler jar not built")
+class TestGenerateTop(unittest.TestCase):
+    def setUp(self):
+        if not cg._jar_knows_top():
+            self.skipTest("this jar predates generate --top")
+
+    def test_top_keeps_only_that_entity(self):
+        r = cg.generate(_TWO_TASKS, top="Inc")
+        self.assertTrue(r["ok"], r)
+        names = sorted(pathlib.Path(p).name for p in r["files"])
+        self.assertEqual(names, ["Inc.v"])
+
+    def test_without_top_every_entity(self):
+        names = sorted(pathlib.Path(p).name for p in cg.generate(_TWO_TASKS)["files"])
+        self.assertEqual(names, ["Dec.v", "Inc.v"])
+
+    def test_unknown_top_names_the_entities(self):
+        r = cg.generate(_TWO_TASKS, top="Nope")
+        self.assertFalse(r["ok"], r)
+        self.assertIn("Nope", r["error"])
+        self.assertIn("Dec, Inc", r["error"])
+
+    def test_top_module_in_persisted_result(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.dict(os.environ, {"PROJECT_ROOT": d}):
+            r = cg.generate(_TWO_TASKS, top="tp.Dec", output_dir="out")
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(r["top_module"], "Dec")
+        self.assertEqual([pathlib.Path(p).name for p in r["written"]], ["Dec.v"])
 
 
 @unittest.skipUnless(JAR_OK and IVERILOG_OK, "jar or iverilog/vvp missing")
