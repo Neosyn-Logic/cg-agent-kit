@@ -68,7 +68,7 @@ task Lfsr {
         }
     }
 
-    sync {
+    push {
         in  bool en;       // advance the register this cycle (low = HOLD)
         in  bool reseed;   // reload the seed — start the sequence over
         out u8   prbs;     // the whole state: a pseudo-random byte per cycle
@@ -109,12 +109,12 @@ network Lfsr_test {
     dut = new Lfsr();
 
     driver = new task {
-        sync { out bool en; out bool reseed; }
+        push { out bool en; out bool reseed; }
         void loop() { en.write(true); reseed.write(false); }
     };
 
     monitor = new task {
-        sync { in u8 prbs; }
+        push { in u8 prbs; }
         u16  n        = 0;      // cycles since the seed was last seen
         bool finished = false;
         void loop() {

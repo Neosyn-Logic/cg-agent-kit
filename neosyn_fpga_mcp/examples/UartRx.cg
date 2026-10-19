@@ -44,7 +44,7 @@ task UartRx {
         }
     }
 
-    sync { in bool rx; out u8 data; out bool valid; out bool busy; }
+    push { in bool rx; out u8 data; out bool valid; out bool busy; }
 
     u8 sh   = 0;      // shift register: bits arrive LSB-first, so shift RIGHT
     u4 cnt  = 0;      // bits left in the frame (0 = idle, hunting for a start bit)

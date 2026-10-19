@@ -22,7 +22,7 @@ Cell counts are the coarse word-level yosys stat (`proc; flatten; opt; stat`).
 > **Division by a CONSTANT needs no recipe.** `x / 10`, `x % 3`, `x / 4` compile
 > inline (pow2 → shift/mask, else a single-cycle reciprocal multiply). The recipes
 > below are for a **runtime** divisor only — and for that, the `std.math.Divide`
-> built-in (multi-cycle, `sync ready` handshake) is the first-class option; `Recip`
+> built-in (multi-cycle, `stream` handshake) is the first-class option; `Recip`
 > / `Divide` / `SeqDiv` are source-included alternatives when you want the divider
 > in your own RTL.
 

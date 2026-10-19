@@ -92,7 +92,7 @@ task HammingEcc {
         }
     }
 
-    sync {
+    push {
         in  u4   din;         // 4 data bits to protect
         in  u8   err;         // error mask XORed into the codeword: the "channel"
         out u8   code;        // the clean 8-bit codeword (encoder output)

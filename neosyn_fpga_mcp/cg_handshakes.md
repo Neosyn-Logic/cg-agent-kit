@@ -4,14 +4,13 @@ How a producer and a consumer synchronize is chosen per **port**, by a qualifier
 in front of the type. Getting this right is the single most common cause of a
 design that *compiles and elaborates but deadlocks or drops data in simulation*.
 
-## The four protocols
+## The three protocols
 
 | Qualifier | Old syntax (still accepted, deprecated) | Wires added | Back-pressure? | Use when |
 |---|---|---|---|---|
 | *(bare)*  | — | data only | none | a value that is valid **every** cycle (a plain wire) |
 | `push`    | `sync` | `valid` | **no** | fire-and-forget, producer-driven; the consumer must keep up |
 | `stream`  | `sync ready` | `valid` + `ready` | **yes** | the consumer may stall the producer (elastic) |
-| `confirm` | `sync ack` | `valid` + `ack` | yes (ack) | the producer needs delivery confirmation |
 
 Key facts:
 - `push` ≡ old `sync` — **valid only, NO ready line**. The producer asserts `valid`;
@@ -20,8 +19,11 @@ Key facts:
   back-pressure the producer. This is the protocol every `std.math.*` / `std.mem.*` /
   `std.fifo.*` built-in uses on its handshake ports (you'll see `sync ready` in their
   source — same thing as `stream`).
-- Prefer the **new** keywords (`push`/`stream`/`confirm`) in new code; the `sync …`
-  forms are deprecated but identical in meaning.
+- Write the **new** keywords (`push`/`stream`) in new code; the `sync …` forms are
+  deprecated but identical in meaning.
+- `confirm` (old `sync ack`) is **refused** by the compiler: its `ack` input was never read,
+  so a value the consumer was not ready for was lost. When the consumer must be able to make
+  the producer wait, use `stream`.
 
 ## Writing a producer correctly
 

@@ -102,7 +102,7 @@ task Biquad {
     const i16 A1 = -15447;
     const i16 A2 =   5461;
 
-    sync { in i16 x; out i16 y; }
+    push { in i16 x; out i16 y; }
 
     i16 x1 = 0;               // x[n-1], x[n-2] — the feed-forward delay line
     i16 x2 = 0;

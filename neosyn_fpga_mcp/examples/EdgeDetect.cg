@@ -58,7 +58,7 @@ task EdgeDetect {
         }
     }
 
-    sync {
+    push {
         in  bool din;    // a level, already synchronous to this clock
         out bool rise;   // one cycle, on the 0 -> 1 transition
         out bool fall;   // one cycle, on the 1 -> 0 transition

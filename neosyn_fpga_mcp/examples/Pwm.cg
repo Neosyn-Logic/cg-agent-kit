@@ -55,7 +55,7 @@ task Pwm {
 
     const int PERIOD = 8;    // cycles per PWM period / divider ratio
 
-    sync { in u4 duty; out bool pwm; out bool tick; }
+    push { in u4 duty; out bool pwm; out bool tick; }
 
     u4   cnt  = 0;           // free-running position within the period
     u4   dreg = 0;           // duty LATCHED at the last period boundary

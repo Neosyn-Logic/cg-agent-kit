@@ -7,7 +7,7 @@ package com.neosyn.examples.arith;
 // ONE register, updated every cycle: `acc = acc + x`. Everything harder (FIR,
 // MAC, dot product) is this loop with a multiply in front of it.
 //
-// Timing, which is the only subtle part: an `out sync` write lands in the SAME
+// Timing, which is the only subtle part: an `out push` write lands in the SAME
 // cycle as the reads, so writing AFTER the update publishes the total that
 // INCLUDES this cycle's input (1, 3, 6, …). Swap the two lines and you publish
 // the previous total instead — a one-cycle lag that is sometimes what you want
@@ -33,7 +33,7 @@ task Accumulator {
         }
     }
 
-    sync { in u8 x; out u16 sum; }
+    push { in u8 x; out u16 sum; }
 
     u16 acc = 0;                 // the running total; wider than `x` by design
 

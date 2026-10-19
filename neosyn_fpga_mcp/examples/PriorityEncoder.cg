@@ -46,7 +46,7 @@ task PriorityEncoder {
         }
     }
 
-    sync {
+    push {
         in  u8   req;     // request / bit vector
         out u3   idx;     // index of the LOWEST set bit (0..7); meaningless when !valid
         out bool valid;   // true iff req != 0

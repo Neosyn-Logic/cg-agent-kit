@@ -32,7 +32,7 @@ task UartTx {
         }
     }
 
-    sync { in bool send; in u8 data; out bool tx; out bool busy; }
+    push { in bool send; in u8 data; out bool tx; out bool busy; }
 
     u10 frame = 0x3FF;   // 10-bit shift register; idle = all ones (line high)
     u4  cnt   = 0;       // bits left to shift out (0 = idle / ready for a byte)

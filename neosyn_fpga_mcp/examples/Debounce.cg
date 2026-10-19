@@ -50,7 +50,7 @@ task Debounce {
 
     const int N = 4;         // a change must hold this many cycles to be accepted
 
-    sync { in bool din; out bool stable; out bool rise; out bool fall; }
+    push { in bool din; out bool stable; out bool rise; out bool fall; }
 
     bool cur = false;        // the accepted (debounced) level
     u4   cnt = 0;            // cycles the input has DISAGREED with `cur`

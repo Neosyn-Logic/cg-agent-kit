@@ -47,7 +47,7 @@ task Crc8 {
 
     const u8 POLY = 0x07;    // x^8 + x^2 + x + 1 (the x^8 term is the bit shifted out)
 
-    sync { in bool din; in bool en; in bool init; out u8 crc; }
+    push { in bool din; in bool en; in bool init; out u8 crc; }
 
     u8 rem = 0;              // running remainder
 

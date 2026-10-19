@@ -72,7 +72,7 @@ task MovingAverage {
 
     const int N = 8;        // window length, in samples. Need NOT be a power of two.
 
-    sync {
+    push {
         in  u8   x;         // one sample per cycle
         out u16  sum;       // the running sum over the window (wider than N * max(x))
         out u8   avg;       // sum / N — the filtered output

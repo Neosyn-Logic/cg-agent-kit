@@ -58,7 +58,7 @@ def _file_scope_supported() -> bool:
         return False
     try:
         return bool(cg.check("package t;\nconst int N = 4;\n"
-                             "task Foo { out sync u8 y; void loop() { y.write(N); } }\n")["ok"])
+                             "task Foo { out push u8 y; void loop() { y.write(N); } }\n")["ok"])
     except Exception:
         return False
 
@@ -453,7 +453,7 @@ class TestBracelessBodyGetsTheBraceRule(unittest.TestCase):
     and abandoned a real test. The rule must be PUSHED on the failing check, not
     only available to a model that thinks to ask."""
 
-    BRACELESS = ("package com.example;\ntask T {\n    out sync u8 y;\n"
+    BRACELESS = ("package com.example;\ntask T {\n    out push u8 y;\n"
                  "    void loop() {\n        u8 acc = 0;\n"
                  "        for (u3 i = 1; i < 4; i++)\n"
                  "            acc = (u8) (acc + i);\n"
@@ -563,7 +563,7 @@ class TestSourceUsageGuard(unittest.TestCase):
     def test_real_source_accepted(self):
         src = ("package com.example;\n"
                "task Counter {\n"
-               "  out sync u8 o;\n"
+               "  out push u8 o;\n"
                "  void loop() { o.write(1); }\n"
                "}\n")
         self.assertIsNone(cg._source_usage_error(src))
@@ -1463,7 +1463,7 @@ class TestLint(unittest.TestCase):
     GOOD = ("package t;\n"
             "task T {\n"
             "    properties { test: { a: [1,2], y: [1,2] } }\n"
-            "    sync { in u8 a; out u8 y; }\n"
+            "    push { in u8 a; out u8 y; }\n"
             "    void loop() { y.write(a.read()); }\n"
             "}\n")
 
@@ -1510,7 +1510,7 @@ class TestLint(unittest.TestCase):
         src = ("package t;\n"
                "task T {\n"
                "    properties { test: { e: [1], y: [1] } }\n"
-               "    sync { in bool e; out u8 y; }\n"
+               "    push { in bool e; out u8 y; }\n"
                "    void loop() { bool v = e.read(); if (v == 1) { y.write(1); } }\n"
                "}\n")
         self.assertIn("bool-compared-to-int", self._rules(src))
@@ -1520,7 +1520,7 @@ class TestLint(unittest.TestCase):
         src = ("package t;\n"
                "task T {\n"
                "    properties { test: { e: [1], y: [1] } }\n"
-               "    sync { in u8 e; out u8 y; }\n"
+               "    push { in u8 e; out u8 y; }\n"
                "    void loop() { u8 v = e.read(); if (v == 1) { y.write(1); } }\n"
                "}\n")
         self.assertNotIn("bool-compared-to-int", self._rules(src))
@@ -1681,7 +1681,7 @@ class TestVerifiedSemantics(unittest.TestCase):
 
     BASE = ("package t;\ntask T {\n"
             "    properties { test: { a: [1,2], y: [1,2] } }\n"
-            "    sync { in u8 a; out u8 y; }\n"
+            "    push { in u8 a; out u8 y; }\n"
             "    void loop() { y.write(a.read()); }\n}\n")
 
     def test_correct_design_is_verified(self):
@@ -1723,7 +1723,7 @@ class TestProbeDerivedHints(unittest.TestCase):
     quietly ceasing to match and leaving the model with nothing."""
 
     PROPS_AFTER_PORTS = ("package t;\ntask T {\n"
-                         "    sync { in u8 a; out u8 y; }\n"
+                         "    push { in u8 a; out u8 y; }\n"
                          "    properties { test: { a: [1], y: [1] } }\n"
                          "    void loop() { y.write(a.read()); } }\n")
 
@@ -1755,12 +1755,12 @@ class TestProbeDerivedHints(unittest.TestCase):
         # The control: same file, block moved up, must compile.
         src = ("package t;\ntask T {\n"
                "    properties { test: { a: [1], y: [1] } }\n"
-               "    sync { in u8 a; out u8 y; }\n"
+               "    push { in u8 a; out u8 y; }\n"
                "    void loop() { y.write(a.read()); } }\n")
         self.assertTrue(cg.check(src)["ok"])
 
     def test_assignment_at_entity_scope(self):
-        src = ("package t;\ntask T {\n    sync { in u8 a; out u8 y; }\n"
+        src = ("package t;\ntask T {\n    push { in u8 a; out u8 y; }\n"
                "    u8 s;\n    s = 5;\n"
                "    void loop() { y.write(a.read()); } }\n")
         r = cg.check(src)
@@ -1769,7 +1769,7 @@ class TestProbeDerivedHints(unittest.TestCase):
 
     def test_inline_initialiser_compiles(self):
         # The control: the fix the hint recommends must actually work.
-        src = ("package t;\ntask T {\n    sync { in u8 a; out u8 y; }\n"
+        src = ("package t;\ntask T {\n    push { in u8 a; out u8 y; }\n"
                "    u8 s = 5;\n"
                "    void loop() { y.write(a.read() + s); } }\n")
         self.assertTrue(cg.check(src)["ok"])
@@ -1779,7 +1779,7 @@ class TestProbeDerivedHints(unittest.TestCase):
         width. It is not -- u9 and uint<9> both compile. Pinned so nobody writes
         a hint teaching a non-problem."""
         for t in ("u9", "uint<9>"):
-            src = (f"package t;\ntask T {{ sync {{ in {t} a; out {t} y; }}\n"
+            src = (f"package t;\ntask T {{ push {{ in {t} a; out {t} y; }}\n"
                    f"  void loop(){{ y.write(a.read()); }} }}\n")
             self.assertTrue(cg.check(src)["ok"], f"{t} should compile")
 
@@ -1867,11 +1867,11 @@ class TestValidatorWarningsReachTheModel(unittest.TestCase):
 
     BOOL_CMP = ("package t;\ntask T {\n"
                 "  properties { test: { a: [1], y: [1] } }\n"
-                "  sync { in bool a; out u8 y; }\n"
+                "  push { in bool a; out u8 y; }\n"
                 "  void loop() { bool v = a.read(); if (v == 1) { y.write(1); } } }\n")
     CLEAN = ("package t;\ntask T {\n"
              "  properties { test: { a: [1,2], y: [1,2] } }\n"
-             "  sync { in u8 a; out u8 y; }\n  void loop() { y.write(a.read()); } }\n")
+             "  push { in u8 a; out u8 y; }\n  void loop() { y.write(a.read()); } }\n")
 
     def test_validator_warning_is_surfaced(self):
         r = cg.check(self.BOOL_CMP)
@@ -2152,7 +2152,7 @@ class TestTheCommonCaseIsNotTaxed(unittest.TestCase):
 
     GOOD = ("package t;\ntask T {\n"
             "  properties { test: { a: [1,2], y: [1,2] } }\n"
-            "  sync { in u8 a; out u8 y; }\n  void loop() { y.write(a.read()); } }\n")
+            "  push { in u8 a; out u8 y; }\n  void loop() { y.write(a.read()); } }\n")
 
     def setUp(self):
         # The session-start push fires once per PROCESS; consume it so these
@@ -2296,7 +2296,7 @@ class TestLocalClientUnknownTool(unittest.TestCase):
         # cg_check has always refused; lint certified it only because lint used to
         # certify anything (F102). Now it needs a real, if minimal, design.
         import cg_local_client as client
-        src = "package t;\ntask X { out sync u8 y; void loop() { y.write(1); } }\n"
+        src = "package t;\ntask X { out push u8 y; void loop() { y.write(1); } }\n"
         self.assertTrue(client.dispatch("cg_lint", {"source": src})["ok"])
 
 

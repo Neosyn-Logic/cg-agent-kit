@@ -387,7 +387,7 @@ def check(source: str, extra_files: dict | None = None,
 _PROBE_SRC = """package cg.probe;
 task Probe {
     properties { test: { inp: [ 1 ], outp: [ 1 ] } }
-    in sync u8 inp; out sync u8 outp;
+    in push u8 inp; out push u8 outp;
     void loop() { outp.write(inp.read()); }
 }
 """
@@ -1443,7 +1443,7 @@ _DOCS = {
                 "hardware in Cg (barrel shifter, signed/unsigned widening, sub-word "
                 "load/store, boot-stream program loading, testbench capture)."),
     "handshakes": (_HERE / "cg_handshakes.md",
-                "Port protocols (bare / push / stream / confirm), back-pressure, "
+                "Port protocols (bare / push / stream), back-pressure, "
                 "connecting instances with .reads(), and THE pacing gotcha: feeding a "
                 "registered built-in (Multiply/Divide) too fast drops data — use the "
                 "feeder/sink pattern or idle() spacing. Read before wiring a network."),
@@ -1689,7 +1689,7 @@ _FAIL_HINTS = [
     # gpt-oss never once recovered from it -- it retried the same edit four times.
     # ROOT CAUSE, reproduced: `properties` must be the FIRST element of an entity
     # body. After the ports -- the natural place to write it -- it is a parse
-    # error. Everything else is position-flexible (a `sync {}` block AFTER
+    # error. Everything else is position-flexible (a `push {}` block AFTER
     # `void loop()` compiles fine), so this is the one construct whose position is
     # fixed, and the message says nothing about order, which is precisely why the
     # loop never broke.
@@ -1709,7 +1709,7 @@ _FAIL_HINTS = [
      "    properties {                    // FIRST, right after `task X {`\n"
      "        test: { x: [1, 2, 3], y: [2, 4, 6] }\n"
      "    }\n"
-     "    sync { in u8 x; out u8 y; }     // ports come AFTER\n"
+     "    push { in u8 x; out u8 y; }     // ports come AFTER\n"
      "    void loop() { y.write((u8)(x.read() * 2)); }\n"
      "}\n"),
 
@@ -1807,7 +1807,7 @@ _FAIL_HINTS = [
      "`while`. The token the message names is the first statement of the body, not "
      "the fault: the fault is the missing `{` just before it.",
      True,
-     'package com.example;\ntask SumBraced {\n    properties { test: { y: [6] } }\n    out sync u8 y;\n    void loop() {\n        u8 acc = 0;\n        for (u3 i = 1; i < 4; i++) {   // braces REQUIRED, even around one statement\n            acc = (u8) (acc + i);\n        }\n        y.write(acc);\n    }\n}\n'),
+     'package com.example;\ntask SumBraced {\n    properties { test: { y: [6] } }\n    out push u8 y;\n    void loop() {\n        u8 acc = 0;\n        for (u3 i = 1; i < 4; i++) {   // braces REQUIRED, even around one statement\n            acc = (u8) (acc + i);\n        }\n        y.write(acc);\n    }\n}\n'),
     (re.compile(r"missing '\}' at 'case'|no viable alternative at input 'case'|"
                 r"\bswitch cannot be resolved", re.I),
      None,
@@ -2060,17 +2060,17 @@ def _scaffold_task(name, package, inputs, outputs):
         rows.append(f"            {n}: [ {', '.join(str(v) for v in vec)} ]"
                     + ("," if i < len(outputs) - 1 else ""))
     first = inputs[0][0]
-    decls = "; ".join([f"in sync {t} {n}" for n, t in inputs]
-                      + [f"out sync {t} {n}" for n, t in outputs])
+    decls = "; ".join([f"in {t} {n}" for n, t in inputs]
+                      + [f"out {t} {n}" for n, t in outputs])
     reads = "\n".join(f"        {t} v_{n} = {n}.read();" for n, t in inputs)
     writes = "\n".join(f"        {n}.write(({t}) v_{first});" for n, t in outputs)
     return f"""package {package};
 
 // {name} -- WHAT IT DOES, in one line.   // {FILL}
 //
-// SELF-CHECKING. The `test:` block drives every `in sync` port from its vector
-// and compares every `out sync` port against its own, one element per cycle and
-// index-aligned (an `out sync` write lands in the SAME cycle as the reads). A
+// SELF-CHECKING. The `test:` block drives every input port from its vector
+// and compares every output port against its own, one element per cycle and
+// index-aligned (a `push` write lands in the SAME cycle as the reads). A
 // mismatch is reported as `port <name> [vector i] expected X -> Y`.
 //
 // This scaffold starts GREEN with a pass-through body: run cg_simulate now and
@@ -2083,7 +2083,7 @@ task {name} {{
         }}
     }}
 
-    {decls};
+    push {{ {decls}; }}
 
     void loop() {{
 {reads}
@@ -2117,7 +2117,7 @@ task {name} {{
         }}
     }}
 
-    sync {{
+    push {{
         in  bool din;     // one bit per cycle
         out bool found;   // pulses on the cycle the pattern completes
         out u2   scode;   // the current state, observable
@@ -2178,7 +2178,7 @@ def _scaffold_stream(name, package, inputs, outputs):
 // nothing is dropped. Either way you never hand-write the handshake FSM.
 //
 // Pick this shape for a DATAFLOW stage. For a cycle-by-cycle function use the
-// `sync` + vector shape instead (cg_scaffold kind="task"), whose test block
+// `push` + vector shape instead (cg_scaffold kind="task"), whose test block
 // value-checks every cycle.
 //
 // NB every `in push` port must be driven by something. An unconnected one
@@ -3198,7 +3198,7 @@ def cg_scaffold(kind: str = "task", name: str = "Foo",
     signal instead of a guess.
 
     kind:
-      task     a `sync` task whose `test:` block VALUE-CHECKS every output
+      task     a `push` task whose `test:` block VALUE-CHECKS every output
                cycle by cycle. The default, and the strongest: prefer it
                whenever the design is a cycle-by-cycle function.
       fsm      an enum-state control machine (+ the publish-before-transition
@@ -3248,7 +3248,7 @@ def cg_lint(source: str = "", path: str | None = None) -> dict:
     This does NOT replace `cg_check` -- it catches what the compiler
     ACCEPTS. Chiefly: a `test:` fixture that drives inputs but compares no
     output (it passes even with a dead design -- the single most expensive
-    failure mode in this codebase), ragged vectors in a sync fixture, a
+    failure mode in this codebase), ragged vectors in a cycle-by-cycle fixture, a
     fixture key that matches no port, a bool compared against 0/1, and a task
     that reads its inputs but writes only constants to every output (it compiles
     and computes nothing).

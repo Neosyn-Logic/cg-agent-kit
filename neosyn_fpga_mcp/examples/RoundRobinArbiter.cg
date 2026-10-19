@@ -64,7 +64,7 @@ task RoundRobinArbiter {
         }
     }
 
-    sync {
+    push {
         in  u4   req;     // one bit per requester; bit k = "requester k wants it"
         out u4   grant;   // ONE-HOT: at most one bit set, 0 when nobody is served
         out u2   who;     // the same winner as an index; meaningless when !busy

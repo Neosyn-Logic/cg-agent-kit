@@ -59,7 +59,7 @@ task SpiMaster {
         }
     }
 
-    sync {
+    push {
         in  bool start; in u8 tx; in bool miso;
         out bool sclk;  out bool mosi; out bool csn; out u8 rx; out bool done;
     }

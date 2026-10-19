@@ -79,7 +79,7 @@ task ManchesterEnc {
         }
     }
 
-    sync {
+    push {
         in  bool din;    // the data bit; must be HELD for both cycles of its bit-time
         out bool line;   // one line half-bit per cycle
         out bool half;   // which half of the bit-time this is (0 = first)
@@ -124,7 +124,7 @@ task ManchesterDec {
         }
     }
 
-    sync {
+    push {
         in  bool line;    // one line half-bit per cycle
         out bool dout;    // the recovered bit — VALID ONLY WHEN `valid`
         out bool valid;   // one cycle per successfully decoded bit
@@ -170,7 +170,7 @@ network Manchester_test {
     dec = new ManchesterDec();
 
     driver = new task {
-        sync { out bool din; }
+        push { out bool din; }
         void loop() {                       // 0xB2, MSB first, each bit held for
             din.write(true);  din.write(true);     // its whole 2-cycle bit-time
             din.write(false); din.write(false);
@@ -184,7 +184,7 @@ network Manchester_test {
     };
 
     monitor = new task {
-        sync { in bool dout; in bool valid; }
+        push { in bool dout; in bool valid; }
         u8   got      = 0;
         u4   n        = 0;
         bool finished = false;

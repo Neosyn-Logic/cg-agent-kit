@@ -11,7 +11,7 @@ compiler enforces them. Seed the verified base with `cg_example("fsm")` (or
 
 ```cg
 task Seq1011 {                       // overlapping "1011" sequence detector
-    sync { in bool din; out bool found; out u2 scode; }
+    push { in bool din; out bool found; out u2 scode; }
 
     enum St { S0, S1, S2, S3 }       // named states — 0..3
     St st;                           // the state register (inline-init, see below)
@@ -104,7 +104,7 @@ another instance), not for zeroing your own state.
 ## Making it self-check
 
 Drive the machine with a `test` vector property — one value per port per cycle.
-Group the ports in a `sync { … }` block. A `bool` port accepts either `true`/`false`
+Group the ports in a `push { … }` block. A `bool` port accepts either `true`/`false`
 **or** numeric `0`/`1` in the vectors:
 
 ```cg

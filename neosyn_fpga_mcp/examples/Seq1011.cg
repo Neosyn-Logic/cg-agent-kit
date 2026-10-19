@@ -27,7 +27,7 @@ task Seq1011 {
         }
     }
 
-    sync {
+    push {
         in  bool din;     // one serial bit per cycle (valid every cycle)
         out bool found;   // 1 on the cycle a "1011" completes (overlapping)
         out u2   scode;   // the current state, as an integer code

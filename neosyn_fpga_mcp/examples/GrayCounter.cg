@@ -69,7 +69,7 @@ task GrayCounter {
         }
     }
 
-    sync {
+    push {
         in  bool en;        // advance the counter this cycle
         out u4   bin;       // the counter, in ordinary binary
         out u4   gray;      // the same value, Gray-coded — the one to cross domains
