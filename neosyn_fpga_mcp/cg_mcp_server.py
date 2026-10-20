@@ -145,7 +145,9 @@ def _dut_of(top: str, source: str) -> str:
 # narrowing, `bool == 1`, ...). They were dropped on the floor here, so a design the IDE
 # flags came back from cg_check as flatly "ok" -- the call meant to tell a model its code
 # is wrong was the one telling it the code was fine.
-_WARN = re.compile(r"^\[neosyn\]\s+warning:\s+(?:([\w./-]+\.cg):(\d+):\s*)?(.+)$", re.M)
+# What a caller's SOURCE TEXT is called in diagnostics (T48): it has no file name of its own.
+_SOURCE_NAME = "<source>.cg"
+_WARN = re.compile(r"^\[neosyn\]\s+warning:\s+(?:([\w./<>-]+\.cg):(\d+):\s*)?(.+)$", re.M)
 
 
 def _warnings(output: str):
@@ -257,6 +259,12 @@ def _run(subcmd: str, source: str, flags: list | None = None,
             p = subprocess.run(cmd, env=ENV, timeout=timeout,
                                capture_output=True, text=True, errors="replace")
             out = (p.stdout or "") + (p.stderr or "")
+            # The temp file is named after the FIRST entity (the CLI needs a name), and the compiler
+            # reports errors against it: a fault in `task Tile` came back as `NN_Params.cg:9`, a file
+            # the caller never had -- and that once sent a search into the wrong sibling file (TRAPS
+            # T48). Report the caller's text as `<source>.cg`, unmistakably not a real file. Only the
+            # bare name is replaced: absolute paths and entity names stay as the compiler wrote them.
+            out = re.sub(r"(?<![\w/.])" + re.escape(src.name) + r"(?![\w])", _SOURCE_NAME, out)
             refusal = _licence_refusal(p.returncode, out)
             if refusal:
                 out += f"\n[cg-kit] {refusal}\n"

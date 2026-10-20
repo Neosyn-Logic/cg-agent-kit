@@ -1110,6 +1110,18 @@ class TestAuthoringHintsAgainstTheRealCompiler(unittest.TestCase):
             "}\n")
         self.assertIn("package_dir", sg["hint"])
 
+    def test_diagnostic_does_not_name_the_internal_temp_file(self):
+        # T48: the source was staged as `<FirstEntity>.cg`, and a fault in the SECOND entity came back
+        # as `NN_Params.cg:9` -- a file the caller never had. It must read `<source>.cg`, same line.
+        r = cg.check("package t;\n\nbundle NN_Params {\n\tconst u8 W = 8;\n}\n\n"
+                     "task Tile {\n\tin push u8 a; out push u8 y;\n"
+                     "\tvoid loop() { y.write(a.read() + ); }\n}\n")
+        self.assertFalse(r["ok"], r)
+        files = {d.get("file") for d in r["diagnostics"]}
+        self.assertNotIn("NN_Params.cg", files, r["diagnostics"])
+        self.assertIn("<source>.cg", files, r["diagnostics"])
+        self.assertTrue(any(d.get("line") == 9 for d in r["diagnostics"]), r["diagnostics"])
+
     def test_switch_statement(self):
         # The C habit that derails the parser for the whole file.
         sg = self._suggestion(
