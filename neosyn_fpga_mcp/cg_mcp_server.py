@@ -1808,8 +1808,10 @@ _FAIL_HINTS = [
      "the fault: the fault is the missing `{` just before it.",
      True,
      'package com.example;\ntask SumBraced {\n    properties { test: { y: [6] } }\n    out push u8 y;\n    void loop() {\n        u8 acc = 0;\n        for (u3 i = 1; i < 4; i++) {   // braces REQUIRED, even around one statement\n            acc = (u8) (acc + i);\n        }\n        y.write(acc);\n    }\n}\n'),
+    # The compiler names `switch` itself from neosyn-studio 2026-10-20 ("has no `switch` / `case`
+    # statement"); older jars give the parser's raw text, which the first two alternatives match.
     (re.compile(r"missing '\}' at 'case'|no viable alternative at input 'case'|"
-                r"\bswitch cannot be resolved", re.I),
+                r"\bswitch cannot be resolved|has no `switch`", re.I),
      None,
      "C⏚ has no `switch`/`case` statement -- reaching for one is a C habit, and "
      "it derails the parser for the rest of the file (every later error is "
