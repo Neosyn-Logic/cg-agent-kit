@@ -2063,17 +2063,68 @@ def _ports(spec, default):
     return out or list(default)
 
 
+# A 1-bit integer is refused by the compiler ("use bool"), so a port asked for as
+# u1 / i1 / uint<1> / int<1> is declared bool (TRAPS T177: the scaffold used to
+# hand that request back red).
+_WIDTH1 = re.compile(r"^(?:[ui]1|u?int\s*<\s*1\s*>)$")
+
+
+def _bool_ports(ports):
+    """Return (ports with width-1 integers turned into bool, the names changed)."""
+    out, changed = [], []
+    for n, t in ports:
+        if _WIDTH1.match(t.replace(" ", "")):
+            out.append((n, "bool"))
+            changed.append(f"{n}:{t}")
+        else:
+            out.append((n, t))
+    return out, changed
+
+
+def _fit(v, t):
+    """The value `v` takes in a port of type `t`: bool -> 0/1, uN/iN wrap to N bits.
+    Any other type (a struct, a generic width) is left as is."""
+    if t == "bool":
+        return 1 if v else 0
+    m = re.match(r"^(?:([ui])(\d+)|(u?int)\s*<\s*(\d+)\s*>)$", t)
+    if not m:
+        return v
+    signed = (m.group(1) or ("u" if m.group(3) == "uint" else "i")) == "i"
+    w = int(m.group(2) or m.group(4))
+    v %= 1 << w
+    return v - (1 << w) if signed and v >= 1 << (w - 1) else v
+
+
+def _vector(t):
+    """Three stimulus values that fit an input of type `t`; the 0 makes a bool output toggle."""
+    return (1, 0, 1) if t == "bool" else tuple(_fit(v, t) for v in (1, 0, 3))
+
+
+def _convert(var, src, dst):
+    """Expression that passes `var` (of type `src`) through to a port of type `dst`."""
+    if dst == "bool":
+        return var if src == "bool" else f"{var} != 0"
+    if src == "bool":
+        return f"({dst}) ({var} ? 1 : 0)"
+    return f"({dst}) {var}"
+
+
+def _literal(v, t):
+    return ("true" if v else "false") if t == "bool" else str(v)
+
+
 def _scaffold_task(name, package, inputs, outputs):
-    vec = (1, 2, 3)
-    rows = [f"            {n}: [ {', '.join(str(v) for v in vec)} ]," for n, _ in inputs]
-    for i, (n, _t) in enumerate(outputs):
-        rows.append(f"            {n}: [ {', '.join(str(v) for v in vec)} ]"
+    first, ftype = inputs[0]
+    vec = _vector(ftype)
+    rows = [f"            {n}: [ {', '.join(str(v) for v in (vec if n == first else _vector(t)))} ],"
+            for n, t in inputs]
+    for i, (n, t) in enumerate(outputs):
+        rows.append(f"            {n}: [ {', '.join(str(_fit(v, t)) for v in vec)} ]"
                     + ("," if i < len(outputs) - 1 else ""))
-    first = inputs[0][0]
     decls = "; ".join([f"in {t} {n}" for n, t in inputs]
                       + [f"out {t} {n}" for n, t in outputs])
     reads = "\n".join(f"        {t} v_{n} = {n}.read();" for n, t in inputs)
-    writes = "\n".join(f"        {n}.write(({t}) v_{first});" for n, t in outputs)
+    writes = "\n".join(f"        {n}.write({_convert('v_' + first, ftype, t)});" for n, t in outputs)
     return f"""package {package};
 
 // {name} -- WHAT IT DOES, in one line.   // {FILL}
@@ -2157,21 +2208,22 @@ task {name} {{
 
 
 def _scaffold_stream(name, package, inputs, outputs):
-    vec = (1, 2, 3)
-    first = inputs[0][0]
+    first, ftype = inputs[0]
+    vec = _vector(ftype)
     in_decls = "\n".join(f"    in push {t} {n};" for n, t in inputs)
     out_decls = "\n".join(f"    out push {t} {n};" for n, t in outputs)
     reads = "\n".join(f"        {t} v_{n} = {n}.read();" for n, t in inputs)
-    writes = "\n".join(f"        {n}.write(({t}) v_{first});" for n, t in outputs)
+    writes = "\n".join(f"        {n}.write({_convert('v_' + first, ftype, t)});" for n, t in outputs)
     # The harness MUST drive every input and check every output: an unconnected
     # push input blocks its consumer forever and the run dies on the cycle cap.
     drv_decls = "\n".join(f"        out push {t} {n};" for n, t in inputs)
     drv_writes = "\n".join(
-        "            " + " ".join(f"{n}.write({v});" for n, _ in inputs)
-        for v in vec)
+        "            " + " ".join(
+            f"{n}.write({_literal(v if n == first else _vector(t)[k], t)});" for n, t in inputs)
+        for k, v in enumerate(vec))
     mon_decls = "\n".join(f"        in push {t} {n};" for n, t in outputs)
     mon_asserts = "\n".join(
-        "            " + " ".join(f"assert({n}.read() == {v});" for n, _ in outputs)
+        "            " + " ".join(f"assert({n}.read() == {_literal(_fit(v, t), t)});" for n, t in outputs)
         for v in vec)
     wire_in = "\n".join(f"    dut.reads(driver.{n});" for n, _ in inputs)
     wire_out = "\n".join(f"    monitor.reads(dut.{n});" for n, _ in outputs)
@@ -2357,9 +2409,12 @@ def scaffold(kind: str = "task", name: str = "Foo", package: str = "com.example"
     if not re.match(r"^[A-Za-z_]\w*(\.[A-Za-z_]\w*)*$", package or ""):
         return {"ok": False, "error": f"'{package}' is not a valid package name"}
 
-    ins = _ports(inputs, [("a", "u8"), ("b", "u8")])
-    outs = _ports(outputs, [("y", "u8")])
+    ins, ins_b = _bool_ports(_ports(inputs, [("a", "u8"), ("b", "u8")]))
+    outs, outs_b = _bool_ports(_ports(outputs, [("y", "u8")]))
     notes = []
+    if kind in ("task", "stream") and (ins_b or outs_b):
+        notes.append(f"{', '.join(ins_b + outs_b)}: declared as bool -- C(g) has no "
+                     f"1-bit integer (u1 is an error); write true/false or a comparison.")
     if kind in ("fsm", "network", "generic") and (inputs or outputs):
         notes.append(f"kind='{kind}' is a fixed pattern demonstration -- the "
                      f"inputs/outputs you passed were not applied; edit the "

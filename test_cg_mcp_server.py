@@ -960,6 +960,24 @@ class TestScaffoldShape(unittest.TestCase):
             self.assertIn("i20 res", r["source"], kind)
             self.assertFalse(r["notes"], kind)
 
+    def test_one_bit_integer_ports_become_bool(self):
+        # T177 (AccelOne probe F172): `mask:u1` gave `out u1 mask` and vectors
+        # [1, 2, 3] -- refused by the compiler, and 2 does not fit one bit.
+        for kind in ("task", "stream"):
+            r = cg.scaffold(kind=kind, inputs=["p:u16"], outputs=["m:u1", "n:uint<1>"],
+                            verify=False)
+            self.assertIn("bool m", r["source"], kind)
+            self.assertIn("bool n", r["source"], kind)
+            self.assertNotRegex(r["source"], r"\bu1\b", kind)
+            self.assertIn("declared as bool", r["notes"][0], kind)
+
+    def test_vectors_fit_each_port_type(self):
+        self.assertEqual(cg._fit(2, "bool"), 1)
+        self.assertEqual(cg._fit(3, "u2"), 3)
+        self.assertEqual(cg._fit(2, "i2"), -2)
+        self.assertEqual(cg._fit(300, "uint<8>"), 44)
+        self.assertEqual(cg._vector("bool"), (1, 0, 1))
+
     def test_fixed_kinds_say_ports_were_ignored(self):
         # Silently dropping them would leave the model editing a file that does
         # not have the ports it asked for, with no clue why.
@@ -1017,6 +1035,11 @@ class TestScaffoldVerifies(unittest.TestCase):
             ("stream", ["a:u16", "b:u16", "c:u16"], ["y:u32"]),
             ("stream", ["a:u8"], ["y0:u8", "y1:u8"]),
             ("stream", ["a:i32"], ["y:i32"]),
+            # T177: the AccelOne probe's exact call, and the other narrow types
+            ("task", ["pixel:u16", "width:u16", "height:u16"], ["mask:u1", "frameCount:u32"]),
+            ("task", ["b:bool"], ["y:u8"]),
+            ("task", ["x:u8"], ["y:i2", "z:int<1>"]),
+            ("stream", ["b:bool", "c:u8"], ["y:u4", "z:bool"]),
         ]
         for kind, ins, outs in cases:
             r = cg.scaffold(kind=kind, name="Var", inputs=ins, outputs=outs)
