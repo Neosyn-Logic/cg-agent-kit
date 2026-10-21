@@ -82,7 +82,10 @@ def _licence_refusal(rc: int, out: str):
             f"(it has no `simulate`).")
 
 # Compiler diagnostics look like:  [neosyn] Foo.cg:12: mismatched input ...
-_DIAG = re.compile(r"^\[neosyn\]\s+([^:]*\.cg):(\d+):\s*(.*)$", re.M)
+# The `[neosyn] ` prefix is optional: a simulation the compiler refuses lists its
+# errors as bare `<source>.cg:56: Port mismatch: ...`, and without this the kit
+# answered ok:False with EMPTY diagnostics (TRAPS T179, jar 3.5.0 and later).
+_DIAG = re.compile(r"^(?:\[neosyn\]\s+)?([^:\n]*\.cg):(\d+):\s*(.*)$", re.M)
 # Transform / HDL-emit errors aren't in file:line form — e.g.
 #   [neosyn] Transform error in test.N_c: IllegalArgumentException — modulo by 3 ...
 # Surface their message too so the model sees *why* it failed (self-repair),

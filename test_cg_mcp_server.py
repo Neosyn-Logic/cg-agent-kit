@@ -986,6 +986,20 @@ class TestScaffoldShape(unittest.TestCase):
         self.assertIn("not applied", r["notes"][0])
 
 
+class TestRefusedSimulationDiagnostics(unittest.TestCase):
+    """T179: a refused simulation prints its compile errors without the `[neosyn]`
+    prefix; they must still become diagnostics, not an empty list."""
+
+    def test_unprefixed_errors_are_parsed(self):
+        out = ("Simulation failed: Cannot simulate <source>.cg: 2 compile error(s) — fix them first.\n"
+               "Output:\n"
+               "<source>.cg:56: Port mismatch: incompatible interface type between 'gen.pm' and 'mask'\n"
+               "[neosyn] <source>.cg:57: another\n")
+        d = cg._diagnostics(out)
+        self.assertEqual([(x["line"], x["message"][:13]) for x in d],
+                         [(56, "Port mismatch"), (57, "another")])
+
+
 class TestVectorFailureHint(unittest.TestCase):
     """T178 (AccelOne probe F174): a vector failure must say outputs are matched in
     WRITE order, or a model with a latency design blames the test form."""
