@@ -1692,6 +1692,24 @@ def example(pattern: str = "", k: int = 1) -> dict:
 # generated)", so keying on the words "divider" / "variable-shift" would match
 # BOTH — only the `right operand of '<op>'` prefix tells them apart.
 _FAIL_HINTS = [
+    # ------------------------------------------------------ 0. vector tests
+    # TRAPS T178 (AccelOne probe F174, 2026-10-20). A neighbour-count design with
+    # one row of latency failed `port n [vector 0] expected 3 -> 0x2`; the model
+    # decided the `test:` form compares output i with input i in the same cycle,
+    # could not express latency, and spent ~65 min trying to work around the form.
+    # It does not compare that way: output vector i is the i-th value the task
+    # WRITES (vector 0 was checked at cycle 4, its first write; Window3x3 checks 4
+    # outputs against 16 inputs). The 2 was the design's own wrong count. Say so.
+    (re.compile(r"^test failure: port \S+ vector \d+ expected"),
+     None,
+     "this is not a latency problem. An output's vector is matched in WRITE order: "
+     "vector i is the i-th value the task wrote to that port, whatever cycle it was "
+     "written in -- not the value for input i. So a design with latency needs no "
+     "padding or other test form: list only the outputs it produces, in order (see "
+     "cg_example Window3x3: 16 inputs, 4 outputs). Every write counts, so a design that "
+     "writes during a pipeline fill must list those values too, or not write until a "
+     "result is ready. Work out by hand what the FIRST failing vector should be and "
+     "trace the datapath that produced it."),
     # ---------------------------------------------------------- 1. authoring
     # The #1 error signature in the 2026-08-20 model probe: 6 occurrences, and
     # gpt-oss never once recovered from it -- it retried the same edit four times.

@@ -986,6 +986,46 @@ class TestScaffoldShape(unittest.TestCase):
         self.assertIn("not applied", r["notes"][0])
 
 
+class TestVectorFailureHint(unittest.TestCase):
+    """T178 (AccelOne probe F174): a vector failure must say outputs are matched in
+    WRITE order, or a model with a latency design blames the test form."""
+
+    def test_vector_failure_gets_the_write_order_hint(self):
+        s = cg.suggest_for_error("test failure: port n vector 0 expected 3 (0x3) but got 2 (0x2)")
+        self.assertTrue(s["ok"], s)
+        self.assertIn("WRITE order", s["hint"])
+        self.assertIn("Window3x3", s["hint"])
+
+
+@unittest.skipUnless(JAR_OK, "compiler jar not built")
+@unittest.skipUnless(BYTECODE_OK, "needs the bytecode simulator")
+class TestVectorWriteOrderAgainstTheCompiler(unittest.TestCase):
+    """What the hint and cg_context claim, measured: a latency design passes a `test:`
+    block whose output vector is SHORTER than its inputs, and a wrong value in it
+    comes back with the hint attached."""
+
+    PAIR_SUM = ("package t;\n"
+                "task PairSum {\n"
+                "    properties { test: { x: [1, 2, 3, 4, 5, 6], y: [3, 7, 11] } }\n"
+                "    push { in u8 x; out u8 y; }\n"
+                "    u8 prev; bool odd;\n"
+                "    void loop() {\n"
+                "        u8 v = x.read();\n"
+                "        if (odd) { y.write((u8) (prev + v)); }\n"
+                "        prev = v; odd = !odd;\n"
+                "    }\n"
+                "}\n")
+
+    def test_latency_design_passes_with_fewer_outputs(self):
+        r = cg.simulate(self.PAIR_SUM, timeout=60)
+        self.assertTrue(r["ok"], r.get("diagnostics"))
+
+    def test_wrong_value_carries_the_hint(self):
+        r = cg.simulate(self.PAIR_SUM.replace("y: [3, 7, 11]", "y: [3, 8, 11]"), timeout=60)
+        self.assertFalse(r["ok"])
+        self.assertIn("WRITE order", r.get("suggestion", {}).get("hint", ""), r)
+
+
 @unittest.skipUnless(JAR_OK, "compiler jar not built")
 @unittest.skipUnless(BYTECODE_OK, "scaffold VERIFIES by simulating; needs the bytecode simulator")
 class TestScaffoldVerifies(unittest.TestCase):

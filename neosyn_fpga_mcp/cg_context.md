@@ -438,6 +438,13 @@ task SimpleAdder {
 }
 ```
 
+**Outputs are matched in WRITE order, not cycle by cycle.** An output port's
+vector lists the values the task writes to it, in order: vector i is the i-th
+write, in whatever cycle it happens. So a design with latency (a line buffer, a
+3x3 window) needs nothing special: list only the outputs it produces. The
+output vector can be shorter than the inputs (`cg_example Window3x3`: 16 pixels
+in, 4 sums out). Every write counts, including any made while a pipeline fills.
+
 The vector form is for **short** tests. Each port's list compiles into one method,
 and the JVM caps a method at 64 KB, so a vector holds a few thousand entries at
 most (measured: 2,000 `u8` values fit, 3,000 do not; the exact limit depends on
