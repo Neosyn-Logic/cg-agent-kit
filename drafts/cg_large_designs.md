@@ -3,7 +3,8 @@
 Read this when the design is bigger than one task: more than about **150 lines, or more than
 three tasks**. `cg_context.md` tells you how to write a task; this file tells you how to build
 twenty of them into something that works. It is how Neosyn's own cores were built (an Ethernet
-MAC of 34 tasks and networks, a UDP/IP stack of 15, an Intel 8088 CPU of 24), including what went wrong first.
+MAC of 34 tasks and networks, a UDP/IP stack of 15, an Intel 8088 CPU of 24), including what went wrong first. Two worked examples follow the method on real cores:
+`walkthrough_udp_stack.md` (medium, 15 tasks) and `walkthrough_8088_cpu.md` (large, 24 tasks).
 
 ---
 
@@ -105,7 +106,10 @@ For each block:
    after each, with `package_dir` set so the other files of the package resolve.
 2. Write its test: a network `TestParser` in the same folder that instantiates ONLY this block, drives it, and
    `assert`s the values that come out (the `properties { test: { terminate: "mon.finished" } }`
-   + monitor-task shape of `cg_context.md`). Run it with
+   + monitor-task shape of `cg_context.md`). Give the test **exactly ONE monitor task** -- the one
+   holding `finished` -- and read every output there, in the order the block produces them. With
+   several monitor tasks the simulator can end the run when the first one finishes and skip the
+   others' checks, and still report a pass. Run it with
    `cg_simulate(path="src/TestParser.cg", package_dir="src")`.
 3. **Make the test fail once on purpose**: change one constant in the block, confirm the test
    goes red, change it back. A test that cannot fail cannot protect you.
