@@ -23,6 +23,6 @@ network SeqDiv_test {
   dut = new SeqDiv();
   driver = new task { out push int<32> a; out push int<32> b; void loop() { a.write(393216); b.write(131072); } };
   monitor = new task { in push int<32> q; bool finished=false;
-    void setup() { int<32> v=q.read(); print("seqdiv a/b=",v," (expect 196608)\n"); finished=true; } };
+    void setup() { int<32> v=q.read(); print("seqdiv a/b=",v," (expect 196608)\n"); assert(v == 196608); finished=true; } };
   dut.reads(driver.a, driver.b); monitor.reads(dut.q);
 }
