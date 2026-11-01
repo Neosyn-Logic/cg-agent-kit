@@ -330,6 +330,30 @@ class TestBothPackageNamesResolveWhenInstalled(unittest.TestCase):
 
 
 @unittest.skipUnless(JAR_OK, "compiler jar not built")
+class TestPackageDirHoldingTheSourceItself(unittest.TestCase):
+    """T194: an oracle (AccelOne #186) read `nn_tile.cg`, then called check(text,
+    package_dir=<its folder>). The kit dropped only `<Entity>.cg`, so the file went
+    in twice and a correct design failed: "'Dense8x4' is also defined in nn_tile.cg"."""
+
+    SRC = ("package t;\n"
+           "task Dense8x4 { in push u8 a; out push u8 y; void loop() { y.write(a.read()); } }\n")
+
+    def test_the_file_itself_is_not_a_sibling(self):
+        with tempfile.TemporaryDirectory() as d:
+            pathlib.Path(d, "nn_tile.cg").write_text(self.SRC)
+            r = cg.check(pathlib.Path(d, "nn_tile.cg").read_text(), package_dir=d)
+            self.assertTrue(r["ok"], r)
+
+    def test_a_real_duplicate_in_another_file_is_still_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            pathlib.Path(d, "nn_tile.cg").write_text(self.SRC)
+            pathlib.Path(d, "copy.cg").write_text(self.SRC.replace("y.write(a.read())", "y.write(a.read() + 1)"))
+            r = cg.check(self.SRC, package_dir=d)
+            self.assertFalse(r["ok"], r)
+            self.assertTrue(any("also defined" in x.get("message", "") for x in r["diagnostics"]), r)
+
+
+@unittest.skipUnless(JAR_OK, "compiler jar not built")
 class TestDocsCanBeReadOneSectionAtATime(unittest.TestCase):
     """F88. `context` (~24,000 chars) could only be fetched whole; after each
     compaction a trial model re-fetched ALL of it, three times in one turn. A

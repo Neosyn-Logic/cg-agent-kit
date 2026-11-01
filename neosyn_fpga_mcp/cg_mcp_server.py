@@ -361,10 +361,17 @@ def _source_of(source: str, path: str | None) -> tuple[str, dict | None, dict | 
 
 def _merge_pkg(source: str, package_dir: str | None, extra_files: dict | None) -> dict:
     """Merge same-package siblings (from package_dir) under any explicit
-    extra_files, dropping the source's own entity file so it isn't defined twice."""
+    extra_files, dropping the source's own file so it isn't defined twice: the
+    one named after its entity, and any whose text IS the source. Only the first
+    was dropped, so a caller passing the text of `nn_tile.cg` with package_dir =
+    its folder sent the file twice, and the compiler refused the duplicate entity
+    (Neosyn TRAPS T194; it blocks since T157). A sibling with OTHER text that
+    defines the same entity is a real duplicate and still goes in, to be refused."""
     pkg = _package_files(package_dir)
     if pkg:
         pkg.pop(f"{_entity_name(source)}.cg", None)
+        mine = _normalized(source)
+        pkg = {name: text for name, text in pkg.items() if _normalized(text) != mine}
     return {**pkg, **(extra_files or {})}
 
 
