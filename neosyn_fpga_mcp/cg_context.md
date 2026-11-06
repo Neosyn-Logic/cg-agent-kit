@@ -544,11 +544,35 @@ the sim log. A passing `cg_simulate` (ok: true) means the asserts held.
     works correctly (the handshake paces it, on both hardware and Fast-sim). Even
     so, the simplest always-correct reduction reads every stream every cycle and
     uses the value conditionally — seed `cg_example("reduction")` (`StreamDot`).
+    **The same loss happens with an unconditional `if (x.available())` when the
+    task is busy:** a `loop()` that needs more than one clock (two writes of one
+    output that could fall in the same cycle, a `fence`, a multi-cycle `if`) sits
+    in a later state on some cycles, and a `push` value arriving then is gone.
+    If a producer can send while the consumer is busy, make the link `stream`.
 14. **Braces around EVERY loop and branch body, even one statement.**
     `for (i = 0; i < N; i++) v.write(x);` is a parse error — write
     `for (i = 0; i < N; i++) { v.write(x); }`; same for `if`, `else`, `while`. The
     compiler reports it as `missing '{' at '<token>'`, naming the body's first
     statement rather than the missing brace before it.
+15. **Always read an input with `x.read()`; a bare `x` is refused.** A
+    `push`/`stream` input used by its bare name (`acc = acc + x;`) with no
+    `.read()` anywhere in the task is a blocking error ("read it with
+    `x.read()`"). Older compilers accepted it, and then the simulator and the
+    Verilog disagreed whenever the input had a gap. A bare `x` in a task that
+    also does `v = x.read()` or tests `x.available()` still means the value just
+    read.
+16. **An unsigned subtraction wraps BEFORE your cast.** With `u3 r`,
+    `(int<9>) (10 * r - 20)` is **236** in hardware for `r = 0`: `10 * r - 20`
+    is computed unsigned at its own width and wraps, then the cast zero-extends
+    it. Cast an operand to the signed type first: `(int<9>) r * 10 - 20` gives
+    -20 in the simulator and the Verilog. Same for any `a - b` that can go
+    below zero: make `a` (or `b`) signed before subtracting.
+17. **`terminate` names ONE flag: `terminate: "mon.finished"`.** Not an
+    expression — `"a.finished && b.finished"` does not work. To wait for two
+    things, have one monitor set `finished = true` once both are done.
+18. **A name is declared once per block.** Two `const N` (or two locals of one
+    name) in the same scope are refused; the same name in two separate branches
+    (`if { u8 t; } else { u8 t; }`) is fine.
 
 ---
 

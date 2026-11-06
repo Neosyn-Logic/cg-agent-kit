@@ -99,3 +99,6 @@ div.reads(num.a, num.b);
    feeder/sink pacing pattern.
 5. Assuming a big runtime `*` is free at any clock — it maps to a DSP but a wide
    combinational product may miss timing; register it via `std.math.Multiply`.
+6. Writing `(int<9>) (10 * r - 20)` with an unsigned `r` and expecting a negative result. The
+   subtraction is unsigned and wraps at its own width first (236 for `r = 0`); the cast then
+   zero-extends the wrapped value. Cast an operand first: `(int<9>) r * 10 - 20` is -20.
