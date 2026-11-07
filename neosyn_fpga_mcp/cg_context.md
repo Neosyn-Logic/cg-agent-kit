@@ -566,7 +566,10 @@ the sim log. A passing `cg_simulate` (ok: true) means the asserts held.
     is computed unsigned at its own width and wraps, then the cast zero-extends
     it. Cast an operand to the signed type first: `(int<9>) r * 10 - 20` gives
     -20 in the simulator and the Verilog. Same for any `a - b` that can go
-    below zero: make `a` (or `b`) signed before subtracting.
+    below zero: make `a` (or `b`) signed before subtracting. The compiler
+    warns on this ("This subtraction is unsigned ... wraps to a large positive
+    value"); fix the code when you see it. Compilers before 3.5.3 do not warn,
+    and their simulator gave -20 where the hardware gives 236.
 17. **`terminate` names ONE flag: `terminate: "mon.finished"`.** Not an
     expression — `"a.finished && b.finished"` does not work. To wait for two
     things, have one monitor set `finished = true` once both are done.

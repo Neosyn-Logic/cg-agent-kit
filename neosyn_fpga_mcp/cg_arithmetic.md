@@ -101,4 +101,5 @@ div.reads(num.a, num.b);
    combinational product may miss timing; register it via `std.math.Multiply`.
 6. Writing `(int<9>) (10 * r - 20)` with an unsigned `r` and expecting a negative result. The
    subtraction is unsigned and wraps at its own width first (236 for `r = 0`); the cast then
-   zero-extends the wrapped value. Cast an operand first: `(int<9>) r * 10 - 20` is -20.
+   zero-extends the wrapped value. Cast an operand first: `(int<9>) r * 10 - 20` is -20. The
+   compiler warns on the first form (from 3.5.3); older simulators gave -20 there, the hardware 236.
