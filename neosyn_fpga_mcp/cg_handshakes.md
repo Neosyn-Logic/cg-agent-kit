@@ -126,7 +126,7 @@ core.addr -> rom.addr, rom.data -> core.data". The compiler never adds a buffer 
 on ONE link, either way:
 
 ```cg
-fifo = new std.fifo.SynchronousFIFO({size: 4, width: 8});   // size 4 or more (smaller hangs cg_simulate)
+fifo = new std.fifo.SynchronousFIFO({size: 4, width: 8});   // any size from 3.5.3; on 3.5.2 and earlier sizes 1-3 hang cg_simulate
 fifo.reads(rom.data);
 core.reads(fifo.dout);
 ```
