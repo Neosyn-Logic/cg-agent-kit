@@ -1969,6 +1969,40 @@ class TestPushedExamplesAreValid(unittest.TestCase):
 
 
 @unittest.skipUnless(BYTECODE_OK, "these validator warnings are emitted by the commercial compiler")
+class TestUnsignedSubtractionWarningReachesTheModel(unittest.TestCase):
+    """TRAPS T218 (founder 2026-11-06): `(int<9>) (10 * r - 20)` with `u3 r` is 236, not -20, in
+    every back end, and the compiler now WARNS. The founder's condition: "both human and models"
+    see it -- so cg_check AND a passing cg_simulate must hand the warning to the model, with its
+    location. A jar older than the warning skips (the warning is not there to surface)."""
+
+    SRC = ("package t;\nnetwork W {\n"
+           "  properties { test: { terminate: \"mon.finished\" } }\n"
+           "  mon = new task {\n    u3 r = 0;\n    bool finished = false;\n"
+           "    void loop() {\n      if (!finished) {\n"
+           "        int<9> late = (int<9>) (10 * r - 20);\n"
+           "        assert(late >= -20);\n"
+           "        if (r == 7) { finished = true; } else { r++; }\n      }\n    }\n  };\n}\n")
+
+    def setUp(self):
+        self.r = cg.check(self.SRC)
+        if not any("subtraction is unsigned" in w["message"] for w in self.r.get("warnings", [])):
+            self.skipTest("this jar predates the T218 warning")
+
+    def test_check_returns_it_with_a_location(self):
+        w = [w for w in self.r["warnings"] if "subtraction is unsigned" in w["message"]][0]
+        self.assertTrue(self.r["ok"], "a warning, not an error: the design still compiles")
+        self.assertEqual(w["line"], 9)
+        self.assertIn("Make an operand signed first", w["message"], "the model needs the fix, not only the fault")
+        self.assertIn("warning", self.r["summary"].lower())
+
+    def test_a_passing_simulation_returns_it_too(self):
+        # 236 >= -20 holds, so the run passes: the warning is the ONLY sign of the wrap a model gets
+        s = cg.simulate(self.SRC)
+        self.assertTrue(s["ran"], s)
+        self.assertTrue(any("subtraction is unsigned" in w["message"] for w in s.get("warnings", [])), s)
+
+
+@unittest.skipUnless(BYTECODE_OK, "these validator warnings are emitted by the commercial compiler")
 class TestValidatorWarningsReachTheModel(unittest.TestCase):
     """A program the IDE flags used to come back from cg_check as flatly "ok".
 
