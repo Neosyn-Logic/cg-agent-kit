@@ -576,6 +576,11 @@ the sim log. A passing `cg_simulate` (ok: true) means the asserts held.
 18. **A name is declared once per block.** Two `const N` (or two locals of one
     name) in the same scope are refused; the same name in two separate branches
     (`if { u8 t; } else { u8 t; }`) is fine.
+19. **Two tasks that ask and answer must not use `stream` both ways.** `rom.reads(core.addr);
+    core.reads(rom.data);` with `stream` ports on both links is a combinational loop between the
+    `ready` signals: it simulates, but `cg_generate_verilog` refuses it (from 3.5.3). Put a
+    `std.fifo.SynchronousFIFO({size: 4, ...})` on one link, or make the answer `push` and send
+    one request at a time. See `cg_docs("handshakes")`.
 
 ---
 

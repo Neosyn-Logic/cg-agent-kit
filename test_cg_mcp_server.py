@@ -2003,6 +2003,34 @@ class TestUnsignedSubtractionWarningReachesTheModel(unittest.TestCase):
 
 
 @unittest.skipUnless(BYTECODE_OK, "these validator warnings are emitted by the commercial compiler")
+@unittest.skipUnless(JAR_OK, "compiler jar not built")
+class TestStreamReadyLoopReachesTheModel(unittest.TestCase):
+    """TRAPS T224 (founder 2026-11-07): two tasks that ask and answer over `stream` ports in both
+    directions make the generated `ready` signals a combinational loop -- the simulator passes,
+    an HDL simulator never advances time. The compiler refuses the ring at generate; the model must
+    get the links AND the fix in the error, not a bare count. A jar older than the check generates
+    the ring, so the test skips."""
+
+    CORE = ("package t;\ntask Core {\n  out stream u4 addr;\n  in stream u8 data;\n  out push u8 sum;\n"
+            "  u4 pc = 0;\n  u8 acc = 0;\n  void loop() {\n    addr.write(pc);\n    fence;\n"
+            "    u8 d = data.read();\n    acc = (u8) (acc + d);\n    sum.write(acc);\n    pc++;\n  }\n}\n")
+    ROM = ("package t;\ntask Rom {\n  in stream u4 addr;\n  out stream u8 data;\n"
+           "  u8 mem[16] = {3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8, 9, 7, 9, 3};\n"
+           "  void loop() {\n    u4 a = addr.read();\n    data.write(mem[a]);\n  }\n}\n")
+    NET = ("package t;\nnetwork Sys {\n  import t.Rom;\n  import t.Core;\n"
+           "  rom = new Rom();\n  core = new Core();\n  rom.reads(core.addr);\n  core.reads(rom.data);\n}\n")
+
+    def test_generate_refuses_it_with_the_links_and_the_fix(self):
+        r = cg.generate(self.NET, extra_files={"Core.cg": self.CORE, "Rom.cg": self.ROM})
+        if r.get("ok"):
+            self.skipTest("this jar predates the T224 check")
+        err = r.get("error") or ""
+        self.assertIn("Combinational loop between stream links", err, r)
+        self.assertIn("core.addr -> rom.addr", err, "the model needs to know WHICH links")
+        self.assertIn("std.fifo.SynchronousFIFO", err, "the model needs the fix, not only the fault")
+        self.assertEqual(r.get("file_count"), 0, "nothing may be generated for a refused design")
+
+
 class TestValidatorWarningsReachTheModel(unittest.TestCase):
     """A program the IDE flags used to come back from cg_check as flatly "ok".
 

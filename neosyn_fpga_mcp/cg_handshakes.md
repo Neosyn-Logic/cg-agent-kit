@@ -108,6 +108,32 @@ consumer.reads(fifo.out);
 
 `std.fifo.AsynchronousFIFO` is the two-clock (CDC) variant with the same `stream` ends.
 
+## Request/answer between two tasks — break the ring with a FIFO
+
+A client that sends a request to a server task and reads the answer back (a CPU and its ROM)
+must NOT use `stream` in both directions directly:
+
+```cg
+rom.reads(core.addr);    // core: out stream addr;  rom: in stream addr
+core.reads(rom.data);    // rom: out stream data;   core: in stream data   <- ring
+```
+
+Each task's input `ready` follows the `ready` of its own `stream` output, so the two `ready`
+signals depend on each other with no register between them: a combinational loop. `cg_simulate`
+passes, but the Verilog does not run (an HDL simulator never advances time) and synthesis rejects
+it. From 3.5.3 `cg_generate_verilog` refuses it: "Combinational loop between stream links in Sys:
+core.addr -> rom.addr, rom.data -> core.data". The compiler never adds a buffer for you. Fix it
+on ONE link, either way:
+
+```cg
+fifo = new std.fifo.SynchronousFIFO({size: 4, width: 8});   // size 4 or more (smaller hangs cg_simulate)
+fifo.reads(rom.data);
+core.reads(fifo.dout);
+```
+
+or make the answer `push` (`out push u8 data;` in the server, `in push u8 data;` in the client)
+and send the next request only after reading the answer.
+
 ## Streaming reductions (emit once per group) — read streams UNCONDITIONALLY
 
 A reduction consumes N inputs and emits one result (a dot product, a running sum, a
