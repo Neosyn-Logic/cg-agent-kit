@@ -66,7 +66,9 @@ asserting test network) is the correctness check; pass it FIRST, then use
 container; they are then in scope UNQUALIFIED for the whole file. They must precede the
 first `task`/`network`/`bundle`. (The open-source compiler does not accept this — there,
 put them in a `bundle` and reference them as `BundleName.member`. `cg_capabilities` tells
-you which compiler you have.) Enum LITERALS still need qualifying either way: `Mode.RUN`.
+you which compiler you have.) Enum literals: write them qualified, `Mode.RUN`, which works on
+every compiler. From 3.5.3, `import Pkg.Bundle.*;` also makes a bundle enum's literals resolve
+bare (`RUN`); on older compilers a bare one is "RUN cannot be resolved".
 
 ```
 package com.example;
