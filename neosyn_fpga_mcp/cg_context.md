@@ -582,9 +582,12 @@ the sim log. A passing `cg_simulate` (ok: true) means the asserts held.
     warns on this ("This subtraction is unsigned ... wraps to a large positive
     value"); fix the code when you see it. Compilers before 3.5.3 do not warn,
     and their simulator gave -20 where the hardware gives 236.
-17. **`terminate` names ONE flag: `terminate: "mon.finished"`.** Not an
-    expression — `"a.finished && b.finished"` does not work. To wait for two
-    things, have one monitor set `finished = true` once both are done.
+17. **`terminate` names flags, not an expression: `terminate: "mon.finished"`.**
+    From compiler 3.5.3 several flags may be joined by `&&`
+    (`"a.finished && b.finished"`: the run ends when all are true); anything else
+    (`||`, `!`, a comparison, an unknown instance, a non-bool variable) is an error
+    that shows the form. Before 3.5.3 only ONE flag works: have one monitor set
+    `finished = true` once everything it watches is done.
 18. **A name is declared once per block.** Two `const N` (or two locals of one
     name) in the same scope are refused; the same name in two separate branches
     (`if { u8 t; } else { u8 t; }`) is fine.
