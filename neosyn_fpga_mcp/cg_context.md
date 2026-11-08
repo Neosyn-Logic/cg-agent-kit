@@ -447,6 +447,16 @@ write, in whatever cycle it happens. So a design with latency (a line buffer, a
 output vector can be shorter than the inputs (`cg_example Window3x3`: 16 pixels
 in, 4 sums out). Every write counts, including any made while a pipeline fills.
 
+Each output port is checked on its OWN writes, so outputs written at different
+rates are fine: `every: [1, 2, 3, 4, 5, 6]` and `odd: [1, 3, 5]` on a task that
+writes `odd` only for odd inputs passes with 9 checks. Before compiler 3.5.3 the
+checker waited for vector i of ALL outputs at once and such a task failed
+(`every == 2 -- every = 3`) although it was right; on an older jar, check outputs
+that come at different rates from a monitor task. This needs every checked output
+to be `push` or `stream` with no `null` in its vector; a bare output, or a vector
+with a `null`, is still read step by step beside the others. A `null` entry checks nothing:
+a value written on that step is not checked (it is not a "must be quiet" check).
+
 The vector form is for **short** tests. Each port's list compiles into one method,
 and the JVM caps a method at 64 KB, so a vector holds a few thousand entries at
 most (measured: 2,000 `u8` values fit, 3,000 do not; the exact limit depends on
