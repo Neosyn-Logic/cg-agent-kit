@@ -293,8 +293,8 @@ A task becomes a multi-state FSM automatically when `loop()` contains blocking
 operations: a `while` loop, a `fence` (end-of-cycle barrier), an `idle(n)`
 (wait n cycles), or multiple gated port reads. The compiler infers one state
 per cycle of work. Use `cg_fsm` to see the result. `n` must be a literal or a
-`const`: `idle(k)` with a run-time `k` compiles without a message and waits ONE
-cycle, whatever `k` holds. To wait a computed number of cycles, count it down
+`const`, at least 1: from 3.5.3 `idle(k)` with a run-time `k` is an error; older
+compilers build it without a message and wait ONE cycle, whatever `k` holds. To wait a computed number of cycles, count it down
 yourself: `while (k != 0) { k = k - 1; }` (no `fence` inside: each iteration is
 already one cycle, and a trailing fence is "Illegal fence"). Measured: it takes
 one cycle more than `idle` with the same constant.
@@ -543,7 +543,11 @@ the sim log. A passing `cg_simulate` (ok: true) means the asserts held.
    (measured: `odd: [1, 3, 5]` on a task that writes `odd` for odd inputs passes). A
    **bare** output KEEPS its last value when not written, so a flag written only when
    it becomes true stays true for ever: write a bare flag every pass
-   (`busy.write(cond);`). See `cg_docs("handshakes")`.
+   (`busy.write(cond);`). See `cg_docs("handshakes")`. Both ends of a link use the
+   same protocol, with ONE allowed mix from 3.5.3: a `push` output read by a bare
+   input reads the LAST value pushed (pushes between two reads are not seen; same on
+   the sim and both HDLs). `stream` → bare and bare → `push` are errors (`Port
+   mismatch: incompatible interface type`); 3.5.2 refuses the push → bare mix too.
 3. **`.read()` / `.write()` with parentheses**, not `.read` as a field.
 4. **Positional `consumer.reads(producer.port, ...)`** — not per-port
    `consumer.inPort.reads(...)`.
