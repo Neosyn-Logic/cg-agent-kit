@@ -68,7 +68,10 @@ first `task`/`network`/`bundle`. (The open-source compiler does not accept this 
 put them in a `bundle` and reference them as `BundleName.member`. `cg_capabilities` tells
 you which compiler you have.) Enum literals: write them qualified, `Mode.RUN`, which works on
 every compiler. From 3.5.3, `import Pkg.Bundle.*;` also makes a bundle enum's literals resolve
-bare (`RUN`); on older compilers a bare one is "RUN cannot be resolved".
+bare (`RUN`); on older compilers a bare one is "RUN cannot be resolved". When two enums of one task or bundle
+declare the same literal name, ALWAYS write it qualified (`B.X`): older compilers silently take
+the FIRST enum's literal for a bare `X` (a wrong value, no message); from 3.5.3 it is the error
+"'X' is ambiguous ... Write A.X or B.X."
 
 ```
 package com.example;
