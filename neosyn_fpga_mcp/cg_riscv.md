@@ -73,16 +73,17 @@ Same shape for right shifts; for arithmetic right shift do it on an `i32` so the
 sign extends. `cg_suggest_for_error` maps a "shift by a variable" rejection to
 the BarrelShift recipe.
 
-### 3. Unsigned compare ⇒ widen to one extra bit
-A full-width compare in C⏚ is **signed** by default, so `a < b` on `u32`
-mis-handles values with the top bit set. Widen both sides by one bit so the MSB
-is a value bit, not a sign bit:
+### 3. Unsigned vs signed compare ⇒ the operand types decide
+A compare of two unsigned values is unsigned; cast to a signed type for a signed
+compare:
 ```
-wb_val = ((u33) a < (u33) op2) ? 1 : 0;   // SLTU / BLTU (unsigned)
+wb_val = (a < op2) ? 1 : 0;               // SLTU / BLTU (a, op2 are u32)
 wb_val = ((i32) a < (i32) op2) ? 1 : 0;   // SLT  / BLT  (signed)
 ```
 This is exactly what distinguishes `BLT -1,1` (taken) from `BLTU -1,1` (not
-taken). The pattern: for unsigned semantics on N-bit data, compute in `u(N+1)`.
+taken). The core itself widens the unsigned side (`(u33) a < (u33) op2`) because
+Fast Sim before 3.5.3 compared a full-width `u32` as signed while the HDL did not
+(TRAPS T254); the widened form is right on every version.
 
 ### 4. Sub-word load ⇒ barrel lane-select + sign/zero extend
 Memory is word-addressed. Select the addressed byte/half by barrel-shifting it
@@ -110,7 +111,7 @@ dmem[addr >> 2] = (word & ~mask) | data;   // other bytes survive
 ```
 
 ### 6. Multiply ⇒ wide product; divide ⇒ unrolled shift-subtract (no `/`)
-C⏚ **rejects `/` and `%`** (there is no hardware divider) — `cg_suggest_for_error`
+C⏚ **rejects `/` and `%` by a run-time divisor** (there is no hardware divider; a constant divisor is fine) — `cg_suggest_for_error`
 points a division rejection at the bit-serial divide recipes. For a *multiply*,
 compute in a double-width type and take the slice:
 ```

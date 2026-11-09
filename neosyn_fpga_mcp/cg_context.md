@@ -17,7 +17,7 @@ probes this host and tells you which backend to use. Where it exists it is the
 default and the right choice — `simulator="iverilog"` is a slower Verilog-level
 cross-check, not the everyday tool. `cg_docs("riscv")` returns a worked CPU reference — the loadable
 single-cycle RV32I core plus reusable patterns for CPU-shaped hardware (barrel
-shifter for runtime shifts, `u(N+1)` widening for unsigned compares, sub-word
+shifter for runtime shifts, unsigned vs signed compares, sub-word
 load/store, count-prefixed boot-stream program loading, lossless-capture
 testbenches); read it before building a processor, decoder, datapath, or stack
 machine.
@@ -131,8 +131,9 @@ package com.example.demo;
 - **Shift amounts must be literal too** — `x << n` / `x >> n` can't take a
   runtime `n`. For a variable shift, build a barrel shifter (literal shifts
   gated by the amount bits); see gotcha #10 and `cg_example("barrel shift")`.
-- **Unsigned `<`/`>` on a full-width value compares as signed** — widen past
-  the sign bit (`(u33)a < (u33)b`) for a true unsigned compare; see gotcha #11.
+- **`<`/`>` on unsigned values is an unsigned compare**, as in the HDL. Fast Sim
+  before 3.5.3 got it wrong for a full-width `u32`/`u64` with the top bit set; see
+  gotcha #11.
 
 ## Fixed-point arithmetic (the #1 thing to get right)
 
@@ -261,10 +262,10 @@ It costs nothing to get right and it is invisible until you check the vectors �
 the wrong version reads like careful code:
 
 ```cg
-// WRONG — emits 1, 0, 1, 0 …            // RIGHT — emits 0, 1, 0, 1 …
+// WRONG — emits true, false, true …     // RIGHT — emits false, true, false …
 void loop() {                            void loop() {
-    state = (u1) (1 - state);                q.write(state);
-    q.write(state);                          state = (u1) (1 - state);
+    state = !state;                          q.write(state);
+    q.write(state);                          state = !state;
 }                                        }
 ```
 
@@ -536,10 +537,13 @@ the sim log. A passing `cg_simulate` (ok: true) means the asserts held.
 
 1. **`package` first.** Every `.cg` begins with a `package` line, or you get
    `mismatched input '...' expecting 'package'`.
-2. **Write a `push` output every cycle.** If a `push`/`stream` output is
-   written only on some `loop()` iterations, the simulator stalls (times out).
-   Make the write unconditional and carry the meaning in the value, or in a
-   separate always-written `bool` flag.
+2. **A `push` output may be written on only some passes; a BARE output may not.** A
+   `push` output that is not written carries no value that cycle, and the reader sees
+   nothing (`if (src.q.available()) { ... }`); a `test:` vector lists only the writes
+   (measured: `odd: [1, 3, 5]` on a task that writes `odd` for odd inputs passes). A
+   **bare** output KEEPS its last value when not written, so a flag written only when
+   it becomes true stays true for ever: write a bare flag every pass
+   (`busy.write(cond);`). See `cg_docs("handshakes")`.
 3. **`.read()` / `.write()` with parentheses**, not `.read` as a field.
 4. **Positional `consumer.reads(producer.port, ...)`** — not per-port
    `consumer.inPort.reads(...)`.
@@ -561,9 +565,12 @@ the sim log. A passing `cg_simulate` (ok: true) means the asserts held.
     literal. To shift by a variable, build a **barrel shifter**: conditional
     literal shifts by 1/2/4/8/16 gated by each bit of the amount — exactly how
     RTL does it. Seed `cg_example("barrel shift")` (`BarrelShift`).
-11. **A full-width unsigned `<` compares as signed.** `(u32)0xFFFFFFFF < 1`
-    reads as `-1 < 1` (true). For a true unsigned compare, widen past the sign
-    bit: `(u33)a < (u33)b`. Signed compares use an explicit `(int<32>)` cast.
+11. **Unsigned compares are unsigned; cast for a signed one.** `a < b` on two
+    `u32` is unsigned in the sim and both HDLs (`0xFFFFFFFF < 1` is false). For a
+    signed compare cast both sides: `(i32) a < (i32) b`. Fast Sim BEFORE 3.5.3
+    compared a full-width `u32`/`u64` as signed (`0xFFFFFFFF < 1` true, the HDL
+    false); there, widen past the sign bit (`(u33) a < (u33) b`), which is right on
+    every version.
 12. **Write the port BEFORE updating the state it reads from.** `count = count + 1;
     value.write(count);` emits `1,2,3…` where `value.write(count); count = count + 1;`
     emits `0,1,2…`. A port carries the register as it stood at the START of the cycle.
@@ -638,7 +645,8 @@ Baby steps, always: each step below is a SMALL change followed by a check.
 2. Add ONE task or ONE piece of datapath (about 40 lines at most) → `cg_check` → fix only
    the lines reported (each diagnostic is `{file, line, message}`).
 3. `cg_simulate` as soon as that piece can be tested → confirm `ok: true` and the `output`
-   matches intent; if it times out, suspect gotcha #2. Then repeat 2–3 for the next piece.
+   matches intent; if it times out, the `terminate` flag was never set: a monitor is waiting for a value
+   that was never written, or a `stream` read has nothing feeding it. Then repeat 2–3 for the next piece.
 4. `cg_fsm` / `cg_graph` if you need to confirm state count or wiring.
 5. `cg_generate_verilog` once it simulates, to hand off RTL.
 6. `cg_synth` to confirm the Verilog synthesizes (`ok: true`, sensible `cells`,
