@@ -27,8 +27,10 @@ Key facts:
 
 ## Writing a producer correctly
 
-- A `push` (or bare) output should be written **every cycle** of the actor's `loop()`.
-  A `push`/`stream` output left unwritten in a cycle is a common source of an X / stall.
+- A **bare** output KEEPS its last value in a cycle where it is not written (measured,
+  sim and Verilog alike). So a flag written only when it becomes true stays true for
+  ever: write a bare flag every cycle (`busy.write(cond);`). A `push` output that is not
+  written simply carries no value that cycle; there is nothing to keep alive.
 - A `stream` output blocks the writing actor until the consumer is `ready`. That
   back-pressure is your friend — it paces the whole chain automatically (see below).
 - `out stream` between two ordinary tasks **sample-holds** the last value; if you need a
@@ -102,8 +104,8 @@ them. Both ends are `stream`, so the handshake is automatic:
 
 ```cg
 fifo = new std.fifo.SynchronousFIFO({size: 16, width: 8});
-fifo.reads(producer.out);
-consumer.reads(fifo.out);
+fifo.reads(producer.q);      // producer: out stream u8 q;
+consumer.reads(fifo.dout);   // the FIFO's output is `dout` (`out` is a reserved word)
 ```
 
 `std.fifo.AsynchronousFIFO` is the two-clock (CDC) variant with the same `stream` ends.

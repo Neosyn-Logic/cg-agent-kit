@@ -64,9 +64,9 @@ asserting test network) is the correctness check; pass it FIRST, then use
 **File-scope declarations.** On a recent Neosyn compiler you may write `const`,
 `typedef`, `struct` and `enum` directly after `package`/imports, with no enclosing
 container; they are then in scope UNQUALIFIED for the whole file. They must precede the
-first `task`/`network`/`bundle`. (The open-source compiler does not accept this — there,
-put them in a `bundle` and reference them as `BundleName.member`. `cg_capabilities` tells
-you which compiler you have.) Enum literals: write them qualified, `Mode.RUN`, which works on
+first `task`/`network`/`bundle`. (An open-source compiler OLDER than 3.5.1 does not accept
+this — there, put them in a `bundle` and reference them as `BundleName.member`; the 3.5.1
+open-source jar does. `cg_capabilities` tells you which compiler you have.) Enum literals: write them qualified, `Mode.RUN`, which works on
 every compiler. From 3.5.3, `import Pkg.Bundle.*;` also makes a bundle enum's literals resolve
 bare (`RUN`); on older compilers a bare one is "RUN cannot be resolved". When two enums of one task or bundle
 declare the same literal name, ALWAYS write it qualified (`B.X`): older compilers silently take
@@ -111,11 +111,14 @@ package com.example.demo;
 - Arrays: `u8 mem[16];` (fixed size). Arrays of state are mutable and persist
   across cycles. Brace initializers work: `u8 lut[4] = {1, 2, 4, 8};`.
 - **struct**: composite type. **enum**: named integer constants.
-- Width is strict: the validator rejects implicit narrowing; cast explicitly.
-  Arithmetic *widens* — `a + b` is one bit wider than its operands — so
-  accumulating into a fixed-width variable needs a cast every step:
-  `sum = (int<32>) (sum + x);`. Forgetting this ("cannot convert from i33 to
-  i32") is the single most common validation error.
+- Every type has an exact width, and assigning a wider value to a narrower
+  variable TRUNCATES silently (keeps the low bits, in the sim and both HDLs):
+  `u8 w = 0x3c; u4 n = w;` gives `0xc`, with no error and no warning. Writing a
+  wider value to a narrower PORT warns ("Type mismatch: cannot convert from u8
+  to u4") but still builds. Arithmetic *widens* — `a + b` is one bit wider than its wider operand — so a
+  sum of two variables stored back into their width warns "This sum can reach
+  ... it wraps before it is used". Size the destination for the result, or
+  cast to say the wrap is intended: `sum = (int<32>) (sum + x);`.
 - `*` is fine (single-cycle, maps to a DSP/multiplier). **`/` and `%` by any
   compile-time CONSTANT are also fine** — a power of two becomes a shift/mask,
   any other constant a reciprocal (magic-number) multiply, both single-cycle and
@@ -288,7 +291,12 @@ latch the output forever. Order the statements correctly and no guard is needed.
 A task becomes a multi-state FSM automatically when `loop()` contains blocking
 operations: a `while` loop, a `fence` (end-of-cycle barrier), an `idle(n)`
 (wait n cycles), or multiple gated port reads. The compiler infers one state
-per cycle of work. Use `cg_fsm` to see the result.
+per cycle of work. Use `cg_fsm` to see the result. `n` must be a literal or a
+`const`: `idle(k)` with a run-time `k` compiles without a message and waits ONE
+cycle, whatever `k` holds. To wait a computed number of cycles, count it down
+yourself: `while (k != 0) { k = k - 1; }` (no `fence` inside: each iteration is
+already one cycle, and a trailing fence is "Illegal fence"). Measured: it takes
+one cycle more than `idle` with the same constant.
 
 For an explicit **control FSM** (a sequence/pattern detector, a protocol
 controller, a serial parser) — an enum state register plus next-state logic —
@@ -427,7 +435,11 @@ plus `properties { clocks: ["din_clock", "dout_clock"] }`. See the `FifoPipe`
 recipe (`cg_example`) for a full, both-backend-verified producer→FIFO→consumer.
 
 Multiple clock domains: `properties { clocks: ["clock_in", "clock_out"] }` on
-the network.
+the network. A multi-bit value crosses with `std.lib.SynchronizerMux` (`push` in,
+bare out); leave `stages + 2` destination-clock periods between writes. Before
+3.5.3 it LOST values whenever the destination clock was slower than the source.
+`cg_simulate` has one clock and cannot show a crossing: say the CDC is unverified unless
+the HDL was run with unequal clock periods.
 
 ---
 

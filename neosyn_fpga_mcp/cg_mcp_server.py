@@ -1769,16 +1769,18 @@ _FAIL_HINTS = [
     #
     # TWO COMPILERS, TWO RULES, so the hint states both rather than asserting one:
     # a recent Neosyn compiler ACCEPTS file-scope declarations (before the first entity)
-    # and says so in its own message; the open-source compiler does not and still emits
-    # the bare "missing EOF at 'const'".
+    # and says so in its own message (so does the open-source jar from 3.5.1, measured
+    # 2026-11-09); an older open-source jar does not and still emits the bare
+    # "missing EOF at 'const'".
     (re.compile(r"missing EOF at '(\w+)'|has no top-level declarations|"
                 r"file-scope declaration must come BEFORE", re.I),
      None,
      "a declaration is in the wrong place. On a recent Neosyn compiler `const`, "
      "`typedef`, `struct` and `enum` MAY be written at file scope, but only BEFORE the "
      "first `task`/`network`/`bundle` — move it up, just after the imports, and it is "
-     "then in scope unqualified for the whole file. On the open-source compiler file "
-     "scope is not supported at all (it says only `missing EOF at '<token>'`): put the "
+     "then in scope unqualified for the whole file. On an open-source compiler older "
+     "than 3.5.1 file scope is not supported at all (it says only `missing EOF at "
+     "'<token>'`): put the "
      "declaration inside the task that uses it, or in a `bundle`, whose members are "
      "referenced as `BundleName.member`. If the named token is already inside an entity, "
      "this is not the real error — the parser was derailed earlier, so fix the FIRST "

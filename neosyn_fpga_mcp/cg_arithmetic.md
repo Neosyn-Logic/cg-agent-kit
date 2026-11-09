@@ -1,8 +1,9 @@
 # C⏚ arithmetic — multiply, divide, modulo, shift
 
 What the operators synthesize to, when they need a built-in, and when they cost money.
-C⏚ is **width-strict**: it rejects implicit narrowing, so the width of the *destination*
-decides whether you keep or truncate a result. Cast explicitly.
+Every value has an exact width, and an assignment to a narrower variable **truncates
+silently** (no error, no warning), so the width of the *destination* decides whether you keep
+or lose the top of a result. Size it for the result, or cast to show the truncation is meant.
 
 ## Multiply `*`
 
