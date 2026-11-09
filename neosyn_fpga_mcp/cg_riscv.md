@@ -151,17 +151,23 @@ count then the words, one per cycle. Wire it in the network with
 `cpu.reads(rom.prog)`. Producer and consumer stay in 1:1 lockstep (one word per
 cycle each), so the push channel is lossless.
 
-### 8. Testbench: lossless per-cycle capture, then deferred asserts
-A single-cycle producer can emit an event (store) on consecutive cycles. But
-`assert` lowers to **FSM fence states**, so a checker that asserts inline spans
->1 cycle and *drops back-to-back events*. The fix: capture losslessly into
-arrays in a one-cycle combinational branch (reads + array writes only, no
-assert), and defer all assertions until capture is complete (by then the program
-has halted, so check timing no longer matters):
+### 8. Testbench: check each event in the cycle it arrives
+A single-cycle producer can emit an event (store) on consecutive cycles. An inline
+`assert` keeps up with that. It adds no FSM state. Measured on 3.5.2 with a producer
+that pushes 20 values back to back, into a checker that asserts each one as it
+reads it (`fsm` reports a single-cycle task): all 20 values are seen and 20 checks
+run, on the simulator and on iverilog. A mutant with the wrong expected value
+fails on both.
 ```
-if (n < N) { if (dut.obs.available()) { rec[n] = dut.obs.read(); n = n + 1; } }
-else       { /* all captured — assert rec[0..N] now */ }
+if (dut.obs.available()) { u8 v = dut.obs.read(); assert(v == expected); expected++; }
 ```
+A checker that WAITS is different. With `idle(1)` after the assert, the next pushes
+go by: measured, it read 1 and then 4, so 2 and 3 were lost. A `push` input does
+not hold a value for a reader that is busy. If the check must wait, first capture
+each event into an array in a one-cycle branch (`rec[n] = dut.obs.read(); n++;`),
+then check the array once the program has
+halted. (Older notes said `assert` itself cost cycles here. The measurement above
+shows it does not.)
 
 ### 9. Trace-noisy programs ⇒ address-filtered checker
 If a program makes many intermediate stores you don't want to predict (sort
