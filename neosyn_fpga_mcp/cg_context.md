@@ -561,6 +561,15 @@ the sim log. A passing `cg_simulate` (ok: true) means the asserts held.
     output that could fall in the same cycle, a `fence`, a multi-cycle `if`) sits
     in a later state on some cycles, and a `push` value arriving then is gone.
     If a producer can send while the consumer is busy, make the link `stream`.
+    **Write each output at ONE place per pass.** Writing a port in several
+    separate `if`s (`if (a) { b.write(1); } if (c) { b.write(1); }`) adds a
+    cycle per extra write even when only one runs, so decide in a local and
+    write once at the end: `bool send = false; if (a) { send = true; } if (c)
+    { send = true; } if (send) { b.write(1); }`. A plain (non-push) output holds
+    its value: `p.write(flag);` once at the end is fine. From 3.5.3 the compiler
+    warns `push input `x` can be missed: `b` is written at N places...` with this
+    rewrite; apply it rather than ignore it. A deliberate serializer
+    (`dout.write(a); dout.write(b);`) is not flagged.
 14. **Braces around EVERY loop and branch body, even one statement.**
     `for (i = 0; i < N; i++) v.write(x);` is a parse error — write
     `for (i = 0; i < N; i++) { v.write(x); }`; same for `if`, `else`, `while`. The
