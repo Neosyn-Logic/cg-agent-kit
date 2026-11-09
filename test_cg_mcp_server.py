@@ -2544,7 +2544,7 @@ class TestRosterThroughTheRealServer(unittest.TestCase):
         schema = _input_schema(tools["cg_scaffold"])
         self.assertEqual(sorted(schema["properties"]),
                          ["inputs", "kind", "name", "outputs", "package", "verify"])
-        self.assertTrue(tools["cg_check"].description.startswith("Parse, scope"))
+        self.assertIn("Parse, scope, and type-check", tools["cg_check"].description)
 
     def test_an_unknown_tool_call_returns_the_roster(self):
         srv = cg.build_server()
