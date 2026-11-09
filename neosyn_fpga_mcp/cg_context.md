@@ -71,7 +71,9 @@ every compiler. From 3.5.3, `import Pkg.Bundle.*;` also makes a bundle enum's li
 bare (`RUN`); on older compilers a bare one is "RUN cannot be resolved". When two enums of one task or bundle
 declare the same literal name, ALWAYS write it qualified (`B.X`): older compilers silently take
 the FIRST enum's literal for a bare `X` (a wrong value, no message); from 3.5.3 it is the error
-"'X' is ambiguous ... Write A.X or B.X."
+"'X' is ambiguous ... Write A.X or B.X." In a network every output (and every instance input) has
+EXACTLY ONE writer: never `.writes()` two instances into the same port. Older compilers only warn
+"connected too many times" and emit a multi-driven net; 3.5.3 refuses it.
 
 ```
 package com.example;
