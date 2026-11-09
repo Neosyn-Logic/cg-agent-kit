@@ -343,7 +343,11 @@ out stream Packet out_pkt;                   // struct-typed port
 
 Arrays of struct and per-element field access work: `Packet batch[3];
 batch[i].hdr.src = ...`. Struct fields at *task state* scope (persisting across
-cycles) are also supported.
+cycles) are also supported. Never use a whole array element or a whole sub-struct
+as a value (`Packet p = batch[i];`, `Header h = pk.hdr;`): copy the leaf fields.
+Older compilers only warn there and use 0 for every field; 3.5.3 refuses it.
+Write ONE `properties` block per entity: a second one replaced the first in older
+compilers (a `reset:` or `test:` in the first was silently lost); 3.5.3 refuses it.
 
 ---
 
