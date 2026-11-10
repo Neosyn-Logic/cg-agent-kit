@@ -182,6 +182,11 @@ in  stream u8 din;    // input, stream interface
 out u4 count;         // bare (no qualifier) — a plain wire, valid every cycle
 ```
 
+On compilers after 3.5.2, `in`, `out`, `sync`, `ack` and `ready` may also be names
+(`in push u8 in;`, `out push bool ack;`, `u8 sync = x.read();`) — except that `ready` is
+never a port, field or enum-literal name (`x.ready` is the handshake test). On 3.5.2 or
+older they are reserved: name ports `din`/`dout`/`acked`.
+
 Interfaces (a port chooses how producer and consumer synchronize):
 
 | Qualifier  | Handshake        | Use when…                                  |

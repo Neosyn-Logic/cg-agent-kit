@@ -105,7 +105,7 @@ them. Both ends are `stream`, so the handshake is automatic:
 ```cg
 fifo = new std.fifo.SynchronousFIFO({size: 16, width: 8});
 fifo.reads(producer.q);      // producer: out stream u8 q;
-consumer.reads(fifo.dout);   // the FIFO's output is `dout` (`out` is a reserved word)
+consumer.reads(fifo.dout);   // the FIFO's output is `dout`
 ```
 
 `std.fifo.AsynchronousFIFO` is the two-clock (CDC) variant with the same `stream` ends.
