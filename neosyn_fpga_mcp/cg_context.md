@@ -187,6 +187,10 @@ On compilers after 3.5.2, `in`, `out`, `sync`, `ack` and `ready` may also be nam
 never a port, field or enum-literal name (`x.ready` is the handshake test). On 3.5.2 or
 older they are reserved: name ports `din`/`dout`/`acked`.
 
+After 3.5.2 a BARE output may also be written with `=` (`sum = acc;` is `sum.write(acc);`).
+A `push`/`stream`/`confirm` output needs `.write(v)` — `=` there is refused (it sends no
+value). `.write()` works everywhere and on every compiler.
+
 Interfaces (a port chooses how producer and consumer synchronize):
 
 | Qualifier  | Handshake        | Use when…                                  |
