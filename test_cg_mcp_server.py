@@ -1170,13 +1170,16 @@ class TestAuthoringHintsAgainstTheRealCompiler(unittest.TestCase):
         self.assertTrue(r["ok"], f"file-scope const should compile: {r}")
 
     def test_declaration_after_entity(self):
-        # ...but the ORDER is still enforced: at most one implicit bundle, ahead of
-        # everything. A declaration trailing an entity is the error that remains.
-        sg = self._suggestion(
-            "package t;\n"
-            "task Foo { in push u8 a; out push u8 y;\n"
-            "  void loop() { y.write(a.read()); } }\n"
-            "const u8 WIDTH = 8;\n")
+        # After compiler 3.5.2 (studio eadac58, Redesign #5) declarations come in any order and
+        # this compiles; on 3.5.2 or older a declaration trailing an entity is an error whose hint
+        # must say "file scope". Both jars are supported, so both outcomes are accepted.
+        src = ("package t;\n"
+               "task Foo { in push u8 a; out push u8 y;\n"
+               "  void loop() { y.write(a.read()); } }\n"
+               "const u8 WIDTH = 8;\n")
+        if cg.check(src)["ok"]:
+            return
+        sg = self._suggestion(src)
         self.assertIn("file scope", sg["hint"])
 
     def test_non_ascii_identifier(self):

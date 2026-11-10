@@ -63,8 +63,9 @@ asserting test network) is the correctness check; pass it FIRST, then use
 
 **File-scope declarations.** On a recent Neosyn compiler you may write `const`,
 `typedef`, `struct` and `enum` directly after `package`/imports, with no enclosing
-container; they are then in scope UNQUALIFIED for the whole file. They must precede the
-first `task`/`network`/`bundle`. (An open-source compiler OLDER than 3.5.1 does not accept
+container; they are then in scope UNQUALIFIED for the whole file. After compiler 3.5.2
+they may sit anywhere between entities; on 3.5.2 or older they must precede the first
+`task`/`network`/`bundle`. (An open-source compiler OLDER than 3.5.1 does not accept
 this — there, put them in a `bundle` and reference them as `BundleName.member`; the 3.5.1
 open-source jar does. `cg_capabilities` tells you which compiler you have.) Enum literals: write them qualified, `Mode.RUN`, which works on
 every compiler. From 3.5.3, `import Pkg.Bundle.*;` also makes a bundle enum's literals resolve

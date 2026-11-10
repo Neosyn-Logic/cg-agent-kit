@@ -1777,8 +1777,9 @@ _FAIL_HINTS = [
                 r"file-scope declaration must come BEFORE", re.I),
      None,
      "a declaration is in the wrong place. On a recent Neosyn compiler `const`, "
-     "`typedef`, `struct` and `enum` MAY be written at file scope, but only BEFORE the "
-     "first `task`/`network`/`bundle` — move it up, just after the imports, and it is "
+     "`typedef`, `struct` and `enum` MAY be written at file scope; on this compiler (3.5.2 "
+     "or older) only BEFORE the first `task`/`network`/`bundle` — move it up, just after "
+     "the imports (a later compiler takes any order), and it is "
      "then in scope unqualified for the whole file. On an open-source compiler older "
      "than 3.5.1 file scope is not supported at all (it says only `missing EOF at "
      "'<token>'`): put the "
