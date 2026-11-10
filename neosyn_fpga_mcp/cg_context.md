@@ -340,6 +340,29 @@ error.
 
 ---
 
+### `switch` (compilers after 3.5.2)
+
+A case never falls through (as in Verilog): it ends at the next `case`.
+`break;` is optional, `case A, B:` and stacked labels share a body, `default:`
+comes last. Switch on a variable (read a port into a local first). A `break`
+inside a nested block of a case is refused.
+
+```cg
+enum State { RED, GREEN, YELLOW }
+State state;
+void setup() { state = RED; }
+void loop() {
+  switch (state) {
+    case RED:    color.write(0); state = GREEN;
+    case GREEN:  color.write(1); state = YELLOW;
+    case YELLOW: color.write(2); state = RED;
+  }
+}
+```
+
+Set an enum state in `setup()`: `State state = RED;` as a field is refused
+today ("not a compile-time constant").
+
 ## Structs
 
 ```cg

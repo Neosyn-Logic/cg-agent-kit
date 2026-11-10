@@ -1852,12 +1852,11 @@ _FAIL_HINTS = [
     (re.compile(r"missing '\}' at 'case'|no viable alternative at input 'case'|"
                 r"\bswitch cannot be resolved|has no `switch`", re.I),
      None,
-     "C⏚ has no `switch`/`case` statement -- reaching for one is a C habit, and "
-     "it derails the parser for the rest of the file (every later error is "
-     "usually cascade). Write the state machine as an if / else-if chain over "
+     "this compiler (3.5.2 or older) has no `switch`/`case`; later ones accept it, with "
+     "no fall-through. Here, write the state machine as an if / else-if chain over "
      "an enum-typed state field: `if (st == IDLE) { ... } else if (st == RUN) "
-     "{ ... }`. cg_scaffold(kind=\"fsm\") returns exactly that shape, already "
-     "compiling and self-checking."),
+     "{ ... }` -- every later error is usually cascade. cg_scaffold(kind=\"fsm\") "
+     "returns exactly that shape, already compiling and self-checking."),
     (re.compile(r"no viable alternative at character '(.)'", re.I),
      None,
      "the quoted character is not valid C⏚ at that point. Two common causes, "
@@ -2001,7 +2000,7 @@ def _no_suggestion(message: str) -> dict:
                 "met a token it did not expect. Fix the FIRST diagnostic only -- later "
                 "ones are usually a cascade from it -- and re-check. Common causes: a "
                 "missing brace around a loop or branch body, a C habit C\u23da does not "
-                "have (switch/case, ++ in an expression), or a declaration in the wrong "
+                "have (++ in an expression), or a declaration in the wrong "
                 "place. See cg_docs('context') for the syntax C\u23da accepts.")
         topic = "context"
     else:

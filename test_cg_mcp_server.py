@@ -1230,15 +1230,20 @@ class TestAuthoringHintsAgainstTheRealCompiler(unittest.TestCase):
         self.assertTrue(any(d.get("line") == 9 for d in r["diagnostics"]), r["diagnostics"])
 
     def test_switch_statement(self):
-        # The C habit that derails the parser for the whole file.
-        sg = self._suggestion(
-            "package t;\n"
-            "task Foo { in push u8 a; out push u8 y;\n"
-            "  enum St { A, B }\n"
-            "  St s;\n"
-            "  void loop() { u8 v = a.read();\n"
-            "    switch (s) { case A: y.write(v); break; case B: y.write(v); break; }\n"
-            "  } }\n")
+        # `switch` compiles after 3.5.2 (neosyn-studio 4c3c29a, Redesign #4); on an older jar it
+        # derails the parser, and the hint must say so. Pinning either alone breaks the suite on
+        # half the compilers the kit supports (as test_array_port).
+        src = ("package t;\n"
+               "task Foo { in push u8 a; out push u8 y;\n"
+               "  enum St { A, B }\n"
+               "  St s;\n"
+               "  void loop() { u8 v = a.read();\n"
+               "    switch (s) { case A: y.write(v); break; case B: y.write(v); break; }\n"
+               "  } }\n")
+        r = cg.check(src)
+        if r["ok"]:
+            return
+        sg = self._suggestion(src)
         self.assertIn("if / else-if", sg["hint"])
 
     def test_array_port(self):
