@@ -209,8 +209,21 @@ sink.reads(fifo.dout);
 ```
 
 A consumer can also read a producer's output directly by reference:
-`gcd.z.read()`, `processor.out_pkt.read()`. **Do not** use the per-port
-`processor.inA.reads(driver.a)` form — it does not resolve in the simulator.
+`gcd.z.read()`, `processor.out_pkt.read()`.
+
+On compilers after 3.5.2 you can also **name** the input you wire, one per statement, in
+any order — the design then no longer depends on the order the ports are declared in:
+
+```cg
+processor.inB.reads(driver.b);
+processor.inA.reads(driver.a);
+processor.reads(driver.c);        // positional: the one input still free (inC)
+this.result.reads(processor.sum); // a network output, by name
+```
+
+A misspelled name is refused with the list of the instance's ports; naming a port twice,
+or giving one named port two sources, is refused too. On 3.5.2 or older the named form
+does not resolve (`Couldn't resolve reference to Inst 'processor.inA'`): use positional.
 
 ---
 
@@ -364,8 +377,7 @@ inside a nested block of a case is refused.
 
 ```cg
 enum State { RED, GREEN, YELLOW }
-State state;
-void setup() { state = RED; }
+State state = RED;
 void loop() {
   switch (state) {
     case RED:    color.write(0); state = GREEN;
@@ -375,8 +387,8 @@ void loop() {
 }
 ```
 
-Set an enum state in `setup()`: `State state = RED;` as a field is refused
-today ("not a compile-time constant").
+`State state = RED;` as a field works on compilers after 3.5.2; on 3.5.2 or older it
+draws "not a compile-time constant" -- there, set it in `setup()` instead.
 
 ## Structs
 
@@ -590,8 +602,9 @@ the sim log. A passing `cg_simulate` (ok: true) means the asserts held.
    the sim and both HDLs). `stream` → bare and bare → `push` are errors (`Port
    mismatch: incompatible interface type`); 3.5.2 refuses the push → bare mix too.
 3. **`.read()` / `.write()` with parentheses**, not `.read` as a field.
-4. **Positional `consumer.reads(producer.port, ...)`** — not per-port
-   `consumer.inPort.reads(...)`.
+4. **Positional `consumer.reads(producer.port, ...)`**, or after 3.5.2 the named
+   `consumer.inPort.reads(producer.port);` (one port per statement). On 3.5.2 or older
+   only the positional form resolves.
 5. **Enums ARE valid port types** (`out Light state;`) — the port carries the
    enum's underlying width. For a cross-actor link, share the enum via a `bundle`
    so both sides name the same type. (Older notes saying enums can't be ports are
