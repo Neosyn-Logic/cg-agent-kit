@@ -111,11 +111,13 @@ package com.example.demo;
 - Arrays: `u8 mem[16];` (fixed size). Arrays of state are mutable and persist
   across cycles. Brace initializers work: `u8 lut[4] = {1, 2, 4, 8};`.
 - **struct**: composite type. **enum**: named integer constants.
-- Every type has an exact width, and assigning a wider value to a narrower
-  variable TRUNCATES silently (keeps the low bits, in the sim and both HDLs):
-  `u8 w = 0x3c; u4 n = w;` gives `0xc`, with no error and no warning. Writing a
-  wider value to a narrower PORT warns ("Type mismatch: cannot convert from u8
-  to u4") but still builds. Arithmetic *widens* — `a + b` is one bit wider than its wider operand — so a
+- Every type has an exact width, and **a value declared wider than its target
+  needs a cast** (3.5.3+, an error): `u8 w = 0x3c; u4 n = w;` is refused with
+  "A u8 value does not fit in u4: 4 bits would be lost. Write `(u4) w` if the
+  truncation is meant"; the same for `o.write(w)` into a narrower port. Write
+  `u4 n = (u4) w;` (keeps the low bits, `0xc`). Before 3.5.3 the local truncated
+  silently and the port only warned. A constant counts at its value's width:
+  `const int N = 10; u4 r = N;` is fine. Arithmetic *widens* — `a + b` is one bit wider than its wider operand — so a
   sum of two variables stored back into their width warns "This sum can reach
   ... it wraps before it is used". Size the destination for the result, or
   cast to say the wrap is intended: `sum = (int<32>) (sum + x);`.
@@ -557,8 +559,10 @@ the sim log. A passing `cg_simulate` (ok: true) means the asserts held.
    stale.)
 6. **Don't cast inside an `assert` and compare to a wide literal** — pass the
    expected value as a parameter/constant of the right width.
-7. **Width is strict** — cast explicitly when narrowing, and re-cast each step
-   when accumulating (`sum = (T)(sum + x)`).
+7. **Width is strict** — storing a wider VARIABLE needs a cast (`(u8) w`), an
+   error from 3.5.3. Arithmetic wraps at the target: `c = c + 1;` on a `u8` is
+   fine. A `bool` compares only with a `bool`: write `if (flag)` / `!flag`, never
+   `flag == 1` (an error from 3.5.3; turn a number into a bool with `x != 0`).
 8. **`/` and `%` by any positive compile-time constant just work** (pow2 →
    shift/mask, else a reciprocal multiply — both single-cycle). Only a RUNTIME
    divisor needs the `std.math.Divide` built-in or `cg_example("divide")`

@@ -2040,29 +2040,31 @@ class TestValidatorWarningsReachTheModel(unittest.TestCase):
     could not turn them into anything structured). Between them, the call meant to
     tell a model its code is wrong was the one telling it the code was fine."""
 
-    BOOL_CMP = ("package t;\ntask T {\n"
-                "  properties { test: { a: [1], y: [1] } }\n"
-                "  push { in bool a; out u8 y; }\n"
-                "  void loop() { bool v = a.read(); if (v == 1) { y.write(1); } } }\n")
+    # A finding that is a WARNING on every jar the kit supports. It was `bool == 1` until compiler
+    # 3.5.3 made that an error (T197); the deprecated `sync { }` spelling warns on 3.5.2 and 3.5.3.
+    WARNS = ("package t;\ntask T {\n"
+             "  properties { test: { a: [1], y: [1] } }\n"
+             "  sync { in u8 a; out u8 y; }\n"
+             "  void loop() { y.write(a.read()); } }\n")
     CLEAN = ("package t;\ntask T {\n"
              "  properties { test: { a: [1,2], y: [1,2] } }\n"
              "  push { in u8 a; out u8 y; }\n  void loop() { y.write(a.read()); } }\n")
 
     def test_validator_warning_is_surfaced(self):
-        r = cg.check(self.BOOL_CMP)
+        r = cg.check(self.WARNS)
         self.assertTrue(r["ok"], "it does still compile -- this is a warning, not an error")
         self.assertTrue(r.get("warnings"), "the validator finding must reach the caller")
-        self.assertIn("undefined", r["warnings"][0]["message"])
+        self.assertIn("deprecated", r["warnings"][0]["message"])
 
     def test_warning_carries_a_location(self):
-        w = cg.check(self.BOOL_CMP)["warnings"][0]
+        w = cg.check(self.WARNS)["warnings"][0]
         self.assertTrue(w["file"], "a finding with no file is not actionable")
         self.assertIsInstance(w["line"], int)
 
     def test_summary_says_so(self):
         # `ok` is the field a model acts on, so a bare ok:True with the objection
         # hidden in a side field would keep the old behaviour in practice.
-        self.assertIn("warning", cg.check(self.BOOL_CMP)["summary"].lower())
+        self.assertIn("warning", cg.check(self.WARNS)["summary"].lower())
 
     def test_clean_design_has_no_warnings(self):
         r = cg.check(self.CLEAN)
