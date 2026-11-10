@@ -341,6 +341,20 @@ error.
 
 ---
 
+### One-statement bodies (compilers after 3.5.2)
+
+`if`, `else`, `for` and `while` take one statement without braces, as in C; an `else`
+belongs to the nearest `if`. Also accepted: `};` after an `enum` or `struct`, a trailing
+`,` in an enum, and a `u` suffix on a literal (`0xA5u`, ignored: width comes from the
+value and its use). On 3.5.2 or older every body needs braces.
+
+```cg
+u8 v = a.read();
+if (v < 10) v = 10;
+else if (v > 100) v = 100;
+y.write(v);
+```
+
 ### `switch` (compilers after 3.5.2)
 
 A case never falls through (as in Verilog): it ends at the next `case`.
@@ -632,8 +646,9 @@ the sim log. A passing `cg_simulate` (ok: true) means the asserts held.
     warns `push input `x` can be missed: `b` is written at N places...` with this
     rewrite; apply it rather than ignore it. A deliberate serializer
     (`dout.write(a); dout.write(b);`) is not flagged.
-14. **Braces around EVERY loop and branch body, even one statement.**
-    `for (i = 0; i < N; i++) v.write(x);` is a parse error — write
+14. **Braces around EVERY loop and branch body, even one statement — on a compiler of
+    3.5.2 or older** (later ones accept one statement without braces, as C).
+    There `for (i = 0; i < N; i++) v.write(x);` is a parse error — write
     `for (i = 0; i < N; i++) { v.write(x); }`; same for `if`, `else`, `while`. The
     compiler reports it as `missing '{' at '<token>'`, naming the body's first
     statement rather than the missing brace before it.

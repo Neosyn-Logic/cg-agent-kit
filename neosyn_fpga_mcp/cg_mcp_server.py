@@ -1841,8 +1841,9 @@ _FAIL_HINTS = [
     # The compiler states it itself from 3.3.0 ("a body needs braces"); both wordings match.
     (re.compile(r"missing '\{' at|a body needs braces", re.I),
      None,
-     "C\u23da requires BRACES around every loop and branch body, even a single "
-     "statement. `for (i = 0; i < N; i++) v.write(x);` is a parse error -- write "
+     "this compiler (3.5.2 or older) requires BRACES around every loop and branch body, "
+     "even a single statement (later ones accept one statement, as C). "
+     "`for (i = 0; i < N; i++) v.write(x);` is a parse error here -- write "
      "`for (i = 0; i < N; i++) { v.write(x); }`. The same holds for `if`, `else` and "
      "`while`. The token the message names is the first statement of the body, not "
      "the fault: the fault is the missing `{` just before it.",
