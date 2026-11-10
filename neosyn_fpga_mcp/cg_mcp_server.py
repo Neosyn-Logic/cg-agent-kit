@@ -214,8 +214,8 @@ def _source_usage_error(source: str) -> str | None:
     not exist, and filed all three of its "could not find" answers about the
     phantom. Its real bug went unfixed.
 
-    Only single-line input is judged: real C⏚ needs a `package` line plus an
-    entity, so a valid one-liner does not exist.
+    Only single-line input is judged. After compiler 3.5.2 a `package` line is optional, so a valid
+    one-liner exists (`task T { ... }`): a line naming no entity is what gives a non-source away.
     """
     s = (source or "").strip()
     if not s:
@@ -224,7 +224,8 @@ def _source_usage_error(source: str) -> str | None:
     if "\n" in s:
         return None
     looks_like_path = os.path.exists(s) or s.endswith(".cg") or "/" in s
-    if looks_like_path or "package" not in s:
+    names_entity = re.search(r"\b(task|network|bundle)\s+\w+\s*[{<(]", s)
+    if not names_entity and (looks_like_path or "package" not in s):
         shown = s if len(s) <= 120 else s[:117] + "..."
         # Phrased per case: "looks like not C⏚ source" (the first version) is not English.
         what = ("source looks like a path" if looks_like_path
@@ -1880,7 +1881,7 @@ _FAIL_HINTS = [
      "same-package sibling is a SEPARATE FILE on disk that this call never "
      "sent — pass `package_dir` (the directory holding the sibling .cg files) "
      "so they are compiled together, or inline the entity in `source`. Check "
-     "the spelling and that the sibling declares the same `package`."),
+     "the spelling, and that the sibling declares the same `package` (or none)."),
     (re.compile(r"Cannot generate HDL for .*: \d+ compile error|"
                 r"No IR files generated", re.I),
      None,
@@ -2680,7 +2681,7 @@ def lint(source: str) -> dict:
         return {"ok": False, "checked": False, "findings": [],
                 "error": "no task, network or bundle was found in `source`, so NOTHING "
                          "was linted -- this is not a clean result. Pass the C\u23da text "
-                         "of a design (the `package` line plus at least one entity)."}
+                         "of a design (at least one task, network or bundle)."}
     findings = []
 
     def add(rule, line, severity, message, fix):

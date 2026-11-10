@@ -592,6 +592,12 @@ class TestSourceUsageGuard(unittest.TestCase):
                "}\n")
         self.assertIsNone(cg._source_usage_error(src))
 
+    def test_one_line_task_without_package_accepted(self):
+        # `package` is optional after compiler 3.5.2 (Redesign #3), so a one-liner can be C\u23da
+        self.assertIsNone(cg._source_usage_error(
+            "task T { out push u8 o; void loop() { o.write(1); } }"))
+        self.assertIsNotNone(cg._source_usage_error("fpga/src/main/cg/T.cg"))
+
     def test_guard_surfaces_as_a_fileless_diagnostic(self):
         diags = cg._diagnostics("[cg-kit] source looks like a path: 'a/b.cg'. ...")
         self.assertEqual(len(diags), 1)

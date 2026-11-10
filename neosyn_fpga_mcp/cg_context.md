@@ -94,11 +94,12 @@ C⏚ has three top-level constructs:
 - **bundle** — a stateless container of constants, `typedef`s, lookup tables,
   and `const` helper functions. Imported by tasks/networks.
 
-Every file **must** start with a `package` declaration. This is the single
-most common first-draft error.
+A file **may** start with a `package` line; it is optional. Without one, the
+file joins the package the other `.cg` files of its folder declare, or, when
+none does, takes it from its path (the folders below `src/`, as in Java).
 
 ```cg
-package com.example.demo;
+package com.example.demo;   // optional
 ```
 
 ---
@@ -214,18 +215,17 @@ A consumer can also read a producer's output directly by reference:
 
 ## Packages and multi-file projects
 
-Every `.cg` starts with a `package` line. **Tasks in the same package resolve
-across files** — a `network` in `Force.cg` can instantiate a `SqDist3` defined in
-`SqDist3.cg`, as long as both declare the *same* package (e.g.
-`package com.acme.nbody;`). Split a design one-task-per-file if you like; just
-keep the package line identical in every file. Pick a real package name for your
-project — not the placeholder `com.example`.
+**Tasks in the same package resolve across files** — a `network` in `Force.cg`
+can instantiate a `SqDist3` defined in `SqDist3.cg` with no import. Files of one
+folder are always in the same package: one with no `package` line joins the one
+its folder-mates declare. Split a design one-task-per-file if you like; either
+leave the `package` line out everywhere, or keep it identical in every file.
 
 Two things that bite on a multi-file project:
 
 - **A `cg_example` result is *text*, not a registered module.** To use it, **save
-  it to a `.cg` file** in your package and **set its `package` line to match
-  yours**. Instantiating `new Tee2()` without writing `Tee2` to a file gives
+  it to a `.cg` file** in your package and **drop its `package` line (or set it to match
+  yours)**. Instantiating `new Tee2()` without writing `Tee2` to a file gives
   `Couldn't resolve reference to Instantiable 'Tee2'`.
 - **The tools only see what you hand them.** `cg_check` / `cg_simulate` /
   `cg_synth` / `cg_generate_verilog` compile in an isolated dir, so a multi-file
@@ -537,8 +537,9 @@ the sim log. A passing `cg_simulate` (ok: true) means the asserts held.
 
 ## Gotchas that make first drafts fail (read these)
 
-1. **`package` first.** Every `.cg` begins with a `package` line, or you get
-   `mismatched input '...' expecting 'package'`.
+1. **`package` is optional** (compilers after 3.5.2). A compiler of 3.5.2 or older
+   still needs it first in every file: there, `expecting 'package'` or "a `}` is missing
+   above this line" on line 1 means add `package <name>;`.
 2. **A `push` output may be written on only some passes; a BARE output may not.** A
    `push` output that is not written carries no value that cycle, and the reader sees
    nothing (`if (src.q.available()) { ... }`); a `test:` vector lists only the writes
