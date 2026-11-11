@@ -2946,6 +2946,15 @@ class TestBabySteps(unittest.TestCase):
                         "it must come before the language reference, not after it")
         self.assertIn("fix ONLY the reported line", ctx)
 
+    def test_a_model_without_tools_is_told_to_send_every_file_complete(self):
+        # S216 11-11 base-model re-measure (a plain chat, no tools): baby steps without tools gave partial
+        # repair answers -- one file re-sent, the rest gone -- and `...` placeholders in 23 of 37 failures.
+        ctx = (cg._HERE / "cg_context.md").read_text()
+        self.assertIn("**No tools?**", ctx)
+        self.assertLess(ctx.index("**No tools?**"), ctx.index("## Work in baby steps"),
+                        "it must come before the baby-steps rule it qualifies")
+        self.assertIn("never `...`", ctx)
+
     def test_the_server_sends_it_at_connect_time(self):
         self.assertIn("BABY STEPS", cg.BABY_STEPS)
         self.assertIn("Never write a whole design in one reply", cg.BABY_STEPS)

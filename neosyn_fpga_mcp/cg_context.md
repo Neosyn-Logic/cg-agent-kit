@@ -21,6 +21,13 @@ shifter for runtime shifts, unsigned vs signed compares, sub-word
 load/store, count-prefixed boot-stream program loading, lossless-capture
 testbenches); read it before building a processor, decoder, datapath, or stack
 machine.
+
+**No tools?** If you are in a plain chat where the files of your reply are compiled
+and tested exactly as written, the tool steps below do not apply. Answer with EVERY
+file of the design, each one complete -- never `...`, never "rest unchanged": a
+placeholder is a syntax error, and a file you leave out is missing. When compiler
+errors come back, answer again with every file complete, the reported lines fixed.
+
 ## Work in baby steps (read this first)
 
 Work in BABY STEPS -- this is how C⏚ designs get finished. Never write a whole design in one reply:
