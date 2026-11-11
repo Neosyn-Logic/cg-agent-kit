@@ -218,7 +218,14 @@ sink.reads(fifo.dout);
 ```
 
 A consumer can also read a producer's output directly by reference:
-`gcd.z.read()`, `processor.out_pkt.read()`.
+`gcd.z.read()`, `processor.out_pkt.read()`. Such a task needs **no** `.reads` line:
+on compilers after 3.5.2, `chk.reads(src.y);` for a task with no input port left is an
+error ("no more ports available ... needs no .reads line"). Delete the line.
+
+Every input of an instance must be wired. After 3.5.2 an unconnected instance input is
+an error in a design network ("input port 'a' of 'c' is not connected; the generated HDL
+ties it to 0"): it reads 0 on every backend, which is almost always a forgotten wire. In a
+**test** network (one with a `test:` property) it is only a warning.
 
 On compilers after 3.5.2 you can also **name** the input you wire, one per statement, in
 any order — the design then no longer depends on the order the ports are declared in:
