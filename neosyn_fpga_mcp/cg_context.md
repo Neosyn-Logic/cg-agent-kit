@@ -321,8 +321,16 @@ per cycle of work. Use `cg_fsm` to see the result. `n` must be a literal or a
 `const`, at least 1: from 3.5.3 `idle(k)` with a run-time `k` is an error; older
 compilers build it without a message and wait ONE cycle, whatever `k` holds. To wait a computed number of cycles, count it down
 yourself: `while (k != 0) { k = k - 1; }` (no `fence` inside: each iteration is
-already one cycle, and a trailing fence is "Illegal fence"). Measured: it takes
+already one cycle, and a fence at the end of a `while` body does nothing). Measured: it takes
 one cycle more than `idle` with the same constant.
+
+A `fence` that ends no cycle gets the warning "This fence does nothing": `fence; fence;`
+(ONE cycle -- use `idle(n)` to wait longer), a fence next to `idle`, right before a
+`while`, last in a `while` body, first or last in `loop()`, last in a branch of an `if`
+that itself ends `loop()` or a `while` body. Everywhere else -- inside an `if`/`else`
+branch with code after the `if`, right after an `if` or a loop, anywhere in a `for` body
+-- a fence adds a cycle: keep it. Compilers before 3.5.3 called many of those "Illegal fence";
+that message was wrong, never delete a fence because of it.
 
 For an explicit **control FSM** (a sequence/pattern detector, a protocol
 controller, a serial parser) — an enum state register plus next-state logic —
