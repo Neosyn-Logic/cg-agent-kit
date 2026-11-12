@@ -1753,7 +1753,8 @@ _FAIL_HINTS = [
     # Reproduced both halves: `u8 s; s = 5;` at entity scope fails, `u8 s = 5;`
     # compiles. A bare assignment is a STATEMENT, and statements only live in
     # functions.
-    (re.compile(r"no viable alternative at input '='", re.I),
+    # (T263: compilers after 3.5.2 say "this assignment is a statement ..." there instead.)
+    (re.compile(r"no viable alternative at input '='|this assignment is a statement", re.I),
      None,
      "a bare assignment at entity scope is not allowed — statements live inside "
      "functions. Either initialise the state inline where it is declared "

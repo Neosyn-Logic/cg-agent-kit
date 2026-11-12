@@ -97,7 +97,9 @@ C⏚ has three top-level constructs:
 - **task** — a sequential hardware block. It has state, ports, and behaviour
   written as `setup()` (runs once at reset) and `loop()` (runs every clock
   cycle). After compilation a task is an FSM, the way the Verilog backend sees
-  it.
+  it. Statements go only inside a function: `while (1) { ... }` or `x = 3;`
+  straight in the task body is a syntax error, and `loop()` already repeats, so
+  no `while (1)` is needed around it.
 - **network** — structural composition. It declares **instances** of tasks /
   other networks and wires their ports together. No behaviour of its own.
 - **bundle** — a stateless container of constants, `typedef`s, lookup tables,
