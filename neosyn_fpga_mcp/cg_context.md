@@ -25,7 +25,8 @@ machine.
 **No tools?** If you are in a plain chat where the files of your reply are compiled
 and tested exactly as written, the tool steps below do not apply. Answer with EVERY
 file of the design, each one complete -- never `...`, never "rest unchanged": a
-placeholder is a syntax error, and a file you leave out is missing. When compiler
+placeholder is a syntax error, and a file you leave out is missing. An error that says
+"after the `...` at line N" goes away once that placeholder is written out. When compiler
 errors come back, answer again with every file complete, the reported lines fixed.
 
 ## Work in baby steps (read this first)
