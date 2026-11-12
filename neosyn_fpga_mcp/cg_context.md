@@ -232,7 +232,8 @@ error ("no more ports available ... needs no .reads line"). Delete the line.
 Every input of an instance must be wired. After 3.5.2 an unconnected instance input is
 an error in a design network ("input port 'a' of 'c' is not connected; the generated HDL
 ties it to 0"): it reads 0 on every backend, which is almost always a forgotten wire. In a
-**test** network (one with a `test:` property) it is only a warning.
+**test** network (one with a `test:` property) it is only a warning. This covers struct and
+array ports too; up to 3.5.2 an unconnected struct or array input got no message at all.
 
 On compilers after 3.5.2 you can also **name** the input you wire, one per statement, in
 any order — the design then no longer depends on the order the ports are declared in:
