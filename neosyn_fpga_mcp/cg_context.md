@@ -442,7 +442,8 @@ Wiring a struct or array port: on compilers up to 3.5.2, a positional
 `q.reads(s.d, s.y)` with a struct port `d` shifts every later argument by one field
 (`s.y` lands on `d`'s 2nd field, `y` is tied to 0) and still says Success -- give each
 field its own port there. Later compilers fill the whole port and refuse a misaligned
-argument. A struct port cannot be wired by name (`q.d.reads(...)`) yet. If a task using
+argument, and also wire a struct or array port by name: `q.d.reads(s.d);` (refused on
+3.5.2). If a task using
 a struct from another file's bundle fails with "Transform error … NullPointerException",
 put the bundle in the same file (3.5.2; fixed later).
 Write ONE `properties` block per entity: a second one replaced the first in older
