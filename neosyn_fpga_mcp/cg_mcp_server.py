@@ -41,6 +41,7 @@ dependency, so they can be unit-tested directly:
 
 Run as a server:  python cg_mcp_server.py   (after `pip install mcp`)
 """
+import atexit
 import difflib
 import hashlib
 import functools
@@ -49,7 +50,10 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
+import threading
+import time
 import tempfile
 from pathlib import Path
 
@@ -237,6 +241,107 @@ def _source_usage_error(source: str) -> str | None:
     return None
 
 
+# Every external command runs in its own process group, and the WHOLE group is killed when the
+# command times out or the server stops. `java -jar <jar> simulate` starts a second JVM for the
+# generated simulator; subprocess.run's timeout kills only the direct child, so that simulator
+# JVM survived every timeout, and two of them filled swap on a shared GPU box until the model
+# server beside it could not reload.
+_LIVE_GROUPS: set[int] = set()
+_LIVE_LOCK = threading.Lock()
+_GROUP_GRACE_S = 2.0
+
+
+def _group_alive(pgid: int) -> bool:
+    """True while any process of the group `pgid` still exists."""
+    try:
+        os.killpg(pgid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # A member we may not signal is still a member.
+        return True
+
+
+def _kill_group(proc: subprocess.Popen) -> None:
+    """SIGTERM the process group led by `proc`, wait briefly, then SIGKILL whatever is left."""
+    pgid = proc.pid
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    deadline = time.monotonic() + _GROUP_GRACE_S
+    while time.monotonic() < deadline:
+        # Reap the leader first: an unreaped leader keeps the group "alive" as a zombie.
+        proc.poll()
+        if not _group_alive(pgid):
+            return
+        time.sleep(0.05)
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    try:
+        proc.wait(timeout=_GROUP_GRACE_S)
+    except subprocess.TimeoutExpired:                           # pragma: no cover
+        pass
+
+
+def _kill_live_groups() -> None:
+    """Kill every process group this server started that is still running."""
+    with _LIVE_LOCK:
+        pgids = list(_LIVE_GROUPS)
+    for pgid in pgids:
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.killpg(pgid, sig)
+            except ProcessLookupError:
+                break
+            if sig is signal.SIGTERM:
+                time.sleep(0.2)
+
+
+def _as_text(data) -> str:
+    """Output from a TimeoutExpired as text, whether it carries str, bytes or nothing."""
+    if data is None:
+        return ""
+    return data if isinstance(data, str) else data.decode("utf-8", "replace")
+
+
+def _run_cmd(cmd: list, *, timeout: float | None = None, **kwargs) -> subprocess.CompletedProcess:
+    """subprocess.run(cmd, capture_output=True, text=True) in a new process group killed whole on timeout or error."""
+    kwargs.setdefault("text", True)
+    if kwargs.get("text"):
+        kwargs.setdefault("errors", "replace")
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            start_new_session=True, **kwargs)
+    with _LIVE_LOCK:
+        _LIVE_GROUPS.add(proc.pid)
+    try:
+        try:
+            out, err = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            _kill_group(proc)
+            # communicate() resumes where it stopped, so this returns everything printed up to
+            # the kill (as str), more than the partial bytes on `exc`. A grandchild that left the
+            # group could still hold the pipe open, so this read is bounded too.
+            try:
+                out, err = proc.communicate(timeout=_GROUP_GRACE_S)
+            except subprocess.TimeoutExpired:                   # pragma: no cover
+                out, err = exc.stdout, exc.stderr
+            raise subprocess.TimeoutExpired(cmd, timeout, output=out, stderr=err) from None
+        except BaseException:
+            _kill_group(proc)
+            raise
+        return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+    finally:
+        with _LIVE_LOCK:
+            _LIVE_GROUPS.discard(proc.pid)
+        for f in (proc.stdout, proc.stderr):
+            if f:
+                f.close()
+
+
 def _run(subcmd: str, source: str, flags: list | None = None,
          extra_files: dict | None = None, timeout: int = 60):
     """Write `source` (+ any extra_files) into an ISOLATED temp dir — the
@@ -260,8 +365,7 @@ def _run(subcmd: str, source: str, flags: list | None = None,
             p.write_text(content)
         cmd = ["java", "-jar", str(JAR), subcmd, str(src)] + (flags or [])
         try:
-            p = subprocess.run(cmd, env=ENV, timeout=timeout,
-                               capture_output=True, text=True, errors="replace")
+            p = _run_cmd(cmd, env=ENV, timeout=timeout)
             out = (p.stdout or "") + (p.stderr or "")
             # The temp file is named after the FIRST entity (the CLI needs a name), and the compiler
             # reports errors against it: a fault in `task Tile` came back as `NN_Params.cg:9`, a file
@@ -547,8 +651,7 @@ def _jar_knows_top() -> bool:
         return False
     if now["sha256"] not in _JAR_TOP:
         try:
-            p = subprocess.run(["java", "-jar", str(JAR), "help"], env=ENV, timeout=60,
-                               capture_output=True, text=True, errors="replace")
+            p = _run_cmd(["java", "-jar", str(JAR), "help"], env=ENV, timeout=60)
             _JAR_TOP[now["sha256"]] = "--top <entity>" in (p.stdout or "") + (p.stderr or "")
         except Exception:                                       # pragma: no cover
             _JAR_TOP[now["sha256"]] = False
@@ -566,8 +669,7 @@ def jar_identity() -> dict:
     if now["sha256"] not in _JAR_VERSION:
         version = None
         try:
-            p = subprocess.run(["java", "-jar", str(JAR), "--version"], env=ENV, timeout=60,
-                               capture_output=True, text=True, errors="replace")
+            p = _run_cmd(["java", "-jar", str(JAR), "--version"], env=ENV, timeout=60)
             m = re.search(r"\bv(\d+\.\d+\.\d+\S*)", (p.stdout or "") + (p.stderr or ""))
             version = m.group(1) if m else None
         except Exception:                                       # pragma: no cover
@@ -928,7 +1030,14 @@ def _simulate_iverilog(source: str, extra_files: dict | None, timeout: int) -> d
         for d in _verilog_lib_dirs(work):
             cmd += ["-y", str(d), "-I", str(d)]
         cmd.append(str(chosen))
-        cp = subprocess.run(cmd, env=ENV, capture_output=True, text=True, errors="replace")
+        try:
+            # The compile had no timeout at all: a hung iverilog held the tool call forever.
+            cp = _run_cmd(cmd, env=ENV, timeout=timeout)
+        except subprocess.TimeoutExpired as e:
+            return {"ok": False, "simulator": "iverilog", "stage": "compile",
+                    "top": chosen.name[:-5], "timed_out": True,
+                    "output": _clean(f"iverilog compile TIMEOUT after {timeout}s\n"
+                                     + _as_text(e.stdout) + _as_text(e.stderr))}
         if cp.returncode != 0:
             return {"ok": False, "simulator": "iverilog", "stage": "compile",
                     "top": chosen.name[:-5],
@@ -941,9 +1050,8 @@ def _simulate_iverilog(source: str, extra_files: dict | None, timeout: int) -> d
             # printed -- a run that had passed every check came back as an EMPTY timeout
             # (devtoolkit-40 #6).
             stdbuf = ["stdbuf", "-oL"] if shutil.which("stdbuf") else []
-            vp = subprocess.run(stdbuf + ["vvp", "-n", str(vvp)], cwd=str(work), env=ENV,
-                                stdin=subprocess.DEVNULL, timeout=timeout,
-                                capture_output=True, text=True, errors="replace")
+            vp = _run_cmd(stdbuf + ["vvp", "-n", str(vvp)], cwd=str(work), env=ENV,
+                          stdin=subprocess.DEVNULL, timeout=timeout)
             vout, vto = (vp.stdout or "") + (vp.stderr or ""), False
         except subprocess.TimeoutExpired as e:
             so = e.stdout or ""
@@ -1188,9 +1296,8 @@ def synth(source: str, top: str | None = None, extra_files: dict | None = None,
         script_path = out_dir / "synth.ys"
         script_path.write_text(script)
         try:
-            yp = subprocess.run([yosys, "-s", str(script_path)],
-                                cwd=str(out_dir), env=ENV, timeout=timeout,
-                                capture_output=True, text=True, errors="replace")
+            yp = _run_cmd([yosys, "-s", str(script_path)],
+                          cwd=str(out_dir), env=ENV, timeout=timeout)
             yout = (yp.stdout or "") + (yp.stderr or "")
             yrc = yp.returncode
             ytimed = False
@@ -1302,8 +1409,7 @@ def _schematics(verilog_files: list, names: list, dest: Path, timeout: int) -> d
         sp = dest / f"_show_{name}.ys"
         sp.write_text(reads + f"prep -top {name}\nshow -format svg -prefix {dest}/schematic_{name}\n")
         try:
-            subprocess.run([yosys, "-s", str(sp)], cwd=str(dest), env=ENV,
-                           timeout=timeout, capture_output=True, text=True)
+            _run_cmd([yosys, "-s", str(sp)], cwd=str(dest), env=ENV, timeout=timeout)
             if svg.exists() and svg.stat().st_size > 0:
                 out[name] = svg.read_text(errors="replace")
         except Exception:  # noqa: BLE001
@@ -3538,8 +3644,24 @@ def build_server():
     return mcp
 
 
+def _stop_on_signal(signum, frame):
+    """Kill the commands still running, then die of the same signal."""
+    _kill_live_groups()
+    signal.signal(signum, signal.SIG_DFL)
+    os.kill(os.getpid(), signum)
+
+
 def main():
-    build_server().run()
+    """Run the MCP server; any command still running when it stops is killed with it."""
+    # Each command is in its own session, so a signal to the server never reaches it: the host
+    # stopping the server (SIGTERM/SIGHUP) or the server exiting must take them down explicitly.
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(sig, _stop_on_signal)
+    atexit.register(_kill_live_groups)
+    try:
+        build_server().run()
+    finally:
+        _kill_live_groups()
 
 
 if __name__ == "__main__":
