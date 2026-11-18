@@ -23,6 +23,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import pathlib
 import shutil
 import unittest
@@ -405,7 +406,7 @@ class TestBuildIdentity(unittest.TestCase):
             fake = subprocess.CompletedProcess([], 0, stdout="Neosyn C? Language Server v9.8.7\n", stderr="")
             with mock.patch.object(cg, "JAR", pathlib.Path(f.name)), \
                     mock.patch.object(cg, "_JAR_VERSION", {}), \
-                    mock.patch.object(cg.subprocess, "run", return_value=fake):
+                    mock.patch.object(cg, "_run_cmd", return_value=fake):
                 jar = cg.jar_identity()
             self.assertEqual(jar["sha256"], hashlib.sha256(b"not really a jar").hexdigest())
             self.assertEqual(jar["version"], "9.8.7")
@@ -451,7 +452,7 @@ class TestNoLicenceBypass(unittest.TestCase):
         from unittest import mock
         with tempfile.NamedTemporaryFile(suffix=".jar") as fake, \
                 mock.patch.object(cg, "JAR", pathlib.Path(fake.name)), \
-                mock.patch.object(cg.subprocess, "run", side_effect=self._refused):
+                mock.patch.object(cg, "_run_cmd", side_effect=self._refused):
             return fn()
 
     def test_a_licence_refusal_is_a_diagnostic_not_silence(self):
@@ -1469,7 +1470,7 @@ class TestGenerateTopRefusals(unittest.TestCase):
             return subprocess.CompletedProcess(cmd, 0, stdout="  --top <entity>      Emit only", stderr="")
         with mock.patch.object(cg, "_jar_now", return_value={"sha256": "aa"}), \
                 mock.patch.object(cg, "_JAR_TOP", {}), \
-                mock.patch.object(cg.subprocess, "run", side_effect=fake_run):
+                mock.patch.object(cg, "_run_cmd", side_effect=fake_run):
             self.assertTrue(cg._jar_knows_top())
             self.assertTrue(cg._jar_knows_top())
         self.assertEqual(len(calls), 1)
@@ -1479,7 +1480,7 @@ class TestGenerateTopRefusals(unittest.TestCase):
         done = subprocess.CompletedProcess([], 0, stdout="  --output <dir>   Output directory", stderr="")
         with mock.patch.object(cg, "_jar_now", return_value={"sha256": "bb"}), \
                 mock.patch.object(cg, "_JAR_TOP", {}), \
-                mock.patch.object(cg.subprocess, "run", return_value=done):
+                mock.patch.object(cg, "_run_cmd", return_value=done):
             self.assertFalse(cg._jar_knows_top())
 
 
@@ -2739,11 +2740,11 @@ class TestJarIdentityEveryCall(unittest.TestCase):
     def test_capabilities_reports_the_jar_on_disk_now_not_the_first_one(self):
         from unittest import mock
         fake = subprocess.CompletedProcess([], 0, stdout="Language Server v1.0.0\n", stderr="")
-        with mock.patch.object(cg.subprocess, "run", return_value=fake):
+        with mock.patch.object(cg, "_run_cmd", return_value=fake):
             first = cg.jar_identity()
             self.jar.write_bytes(b"jar number two")
             fake2 = subprocess.CompletedProcess([], 0, stdout="Language Server v2.0.0\n", stderr="")
-            with mock.patch.object(cg.subprocess, "run", return_value=fake2):
+            with mock.patch.object(cg, "_run_cmd", return_value=fake2):
                 second = cg.jar_identity()
         self.assertEqual((first["version"], first["same_as_at_start"]), ("1.0.0", True))
         self.assertEqual(second["sha256"], self._sha(b"jar number two"))
@@ -3080,6 +3081,107 @@ class TestPatternEncyclopedia(unittest.TestCase):
                 self.assertEqual(src.count(old), 1, f"{name}: the mutation site moved")
                 self.assertFalse(cg.simulate(src.replace(old, new))["ok"],
                                  f"{name}: the broken variant must FAIL its own test")
+
+class TestATimeoutKillsTheWholeProcessGroup(unittest.TestCase):
+    """`java -jar <jar> simulate` starts a second JVM: a timeout must kill it too,
+    not only the direct child, or each timeout leaves a simulator JVM running."""
+
+    # Forks a long-lived child, prints that child's PID, and waits on another:
+    # the shape of the jar launching the simulator JVM. The test watches the
+    # forked child itself, which is what survived, whatever group it ended up in.
+    FORKS = "sleep 300 & echo $!; sleep 300"
+
+    @staticmethod
+    def _alive(pid: int) -> bool:
+        """True while `pid` exists and is not a zombie."""
+        # No match on the command line: the child can still be the forked `sh`, not yet
+        # `sleep`, when its PID is printed, and a check on `sleep` then calls it dead.
+        try:
+            stat = pathlib.Path(f"/proc/{pid}/stat").read_text()
+        except OSError:
+            return False
+        return stat.rsplit(")", 1)[1].split()[0] != "Z"
+
+    def _assert_gone(self, pid: int) -> None:
+        """The forked child must be dead; kill it ourselves if not, so a failure leaves nothing behind."""
+        alive = self._alive(pid)
+        if alive:
+            os.kill(pid, 9)
+        self.assertFalse(alive, "the forked child outlived the command (the orphaned simulator JVM)")
+
+    def _child_from(self, out) -> int:
+        """The forked child's PID, which the fake command printed first."""
+        text = out if isinstance(out, str) else (out or b"").decode()
+        m = re.match(r"\s*(\d+)", text)
+        self.assertIsNotNone(m, f"the command's output was lost on timeout: {text!r}")
+        return int(m.group(1))
+
+    def test_helper_kills_the_forked_child_and_keeps_the_output(self):
+        with self.assertRaises(subprocess.TimeoutExpired) as ctx:
+            cg._run_cmd(["sh", "-c", self.FORKS], timeout=1)
+        self._assert_gone(self._child_from(ctx.exception.stdout))
+
+    def test_helper_returns_like_subprocess_run(self):
+        r = cg._run_cmd(["sh", "-c", "echo out; echo err >&2; exit 3"], timeout=10)
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (3, "out\n", "err\n"))
+
+    def test_an_interrupted_call_kills_the_group(self):
+        # Any exception while waiting (here a KeyboardInterrupt from communicate) must not
+        # leave the group behind either.
+        seen = {}
+
+        def interrupted(proc, *a, **kw):
+            seen["child"] = int(proc.stdout.readline())  # the shell has forked its child
+            raise KeyboardInterrupt
+
+        with mock.patch.object(subprocess.Popen, "communicate", interrupted):
+            with self.assertRaises(KeyboardInterrupt):
+                cg._run_cmd(["sh", "-c", self.FORKS], timeout=30)
+        self._assert_gone(seen["child"])
+
+    def test_server_stop_kills_running_groups(self):
+        proc = subprocess.Popen(["sh", "-c", self.FORKS], stdout=subprocess.PIPE,
+                                start_new_session=True)
+        try:
+            child = int(proc.stdout.readline())
+            with cg._LIVE_LOCK:
+                cg._LIVE_GROUPS.add(proc.pid)
+            cg._kill_live_groups()
+            proc.wait(timeout=5)
+            time.sleep(0.2)  # the orphaned child is reaped by init, not by us
+            self._assert_gone(child)
+        finally:
+            with cg._LIVE_LOCK:
+                cg._LIVE_GROUPS.discard(proc.pid)
+            proc.stdout.close()
+            if proc.poll() is None:  # pragma: no cover
+                os.killpg(proc.pid, 9)
+
+    def test_the_jar_call_kills_the_simulator_jvm_on_timeout(self):
+        # The wiring, not the helper: `_run` with a fake `java` that forks like the jar does.
+        with tempfile.TemporaryDirectory() as d:
+            java = pathlib.Path(d) / "java"
+            java.write_text("#!/bin/sh\n" + self.FORKS + "\n")
+            java.chmod(0o755)
+            jar = pathlib.Path(d) / "fake.jar"
+            jar.write_text("")
+            env = {**cg.ENV, "PATH": d + os.pathsep + cg.ENV.get("PATH", "")}
+            with mock.patch.object(cg, "JAR", jar), mock.patch.object(cg, "ENV", env):
+                rc, out, timed_out, _ = cg._run("simulate", "package t;\ntask T { void loop() {} }\n",
+                                                timeout=1)
+        self.assertEqual((rc, timed_out), (124, True))
+        self._assert_gone(self._child_from(out))
+
+    def test_no_external_command_bypasses_the_helper(self):
+        # A new subprocess.run call would bring the orphaned child back.
+        import ast
+        tree = ast.parse(pathlib.Path(cg.__file__).read_text())
+        calls = [n.lineno for n in ast.walk(tree)
+                 if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                 and n.func.attr in ("run", "call", "check_output", "check_call")
+                 and isinstance(n.func.value, ast.Name) and n.func.value.id == "subprocess"]
+        self.assertEqual(calls, [], "subprocess calls outside _run_cmd, at these lines")
+
 
 if __name__ == "__main__":
     unittest.main()
