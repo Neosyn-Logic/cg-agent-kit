@@ -134,6 +134,12 @@ simulator and the generated hardware can disagree, and only the second one ships
   its input pauses mid-frame.
 - Mind latency: if two paths meet (data and its checksum), count the cycles on each; the shorter
   one needs a FIFO or a held value. Write the counts in DESIGN.md.
+- A `stream` write that waits stalls the WHOLE task: while its reader is busy, nothing else in
+  that `loop()` runs. A task that must answer something every clock (a `push` request, a
+  register read) cannot also feed a stream reader that may be busy. Split it into two tasks:
+  one that answers every clock, one that feeds the busy reader (a FIFO between them if the
+  reader can fall behind). This was found when a miner's result ring stopped answering its CPU
+  while the hash device it fed was busy.
 
 **When the top fails and every block passes on its own, the bug is at a seam.** Bisect:
 
