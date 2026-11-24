@@ -1029,6 +1029,12 @@ def generate(source: str, target: str = "verilog",
         # to it — none can be an unrelated-file false positive.
         result = {"ok": rc == 0 and bool(rel) and not diags, "diagnostics": diags,
                   "file_count": len(rel)}
+        warns = _warnings(out)
+        if warns:
+            # TRAPS T289: the compiler's warnings (e.g. a bare port re-read after a clock
+            # break) were dropped here, so a design cg_check flagged came back from generate
+            # looking clean. Same field and cap as cg_check and cg_simulate.
+            result["warnings"] = warns[:5]
         refused = re.search(r"^Error: (.+)$", out, re.M)
         if rc != 0 and refused and not diags:
             # e.g. an unknown `top`: the jar names the entities there are -- pass that on,

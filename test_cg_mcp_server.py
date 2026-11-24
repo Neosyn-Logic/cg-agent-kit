@@ -2088,6 +2088,19 @@ class TestValidatorWarningsReachTheModel(unittest.TestCase):
         self.assertNotIn("warnings", r)
         self.assertIn("OK", r["summary"])
 
+    def test_generate_surfaces_the_same_warning(self):
+        # TRAPS T289: cg_generate_verilog dropped the compiler warnings, so a design
+        # cg_check flagged came back from generate looking clean.
+        r = cg.generate(self.WARNS)
+        self.assertTrue(r["ok"], r)
+        self.assertTrue(r.get("warnings"), "generate must pass the warning on, as check does")
+        self.assertIn("deprecated", r["warnings"][0]["message"])
+
+    def test_generate_clean_design_has_no_warnings(self):
+        r = cg.generate(self.CLEAN)
+        self.assertTrue(r["ok"], r)
+        self.assertNotIn("warnings", r)
+
     def test_parser_handles_unlocated_and_malformed(self):
         self.assertEqual(cg._warnings(""), [])
         self.assertEqual(cg._warnings(None), [])
